@@ -9,6 +9,7 @@ const __dirname = dirname(__filename);
 
 const ACCOUNTS_FILE = `${__dirname}/moltbook_accounts.json`;
 const POST_API_URL = 'https://www.moltbook.com/api/v1/posts';
+const INDEX_POST_API_URL = 'https://mbc20.xyz/api/index-post';
 
 // Wallet address - biến được khai báo
 let WALLET_ADDRESS = '';
@@ -120,6 +121,24 @@ async function createLinkPost(apiKey, wallet) {
  */
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Index post sau khi đã post thành công
+ */
+async function indexPost(postId) {
+  try {
+    const response = await fetch(`${INDEX_POST_API_URL}?id=${postId}`);
+    const data = await response.json();
+    
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || `HTTP ${response.status}: ${data.message || 'Unknown error'}`);
+    }
+    
+    return data;
+  } catch (error) {
+    throw new Error(`Index post failed: ${error.message}`);
+  }
 }
 
 /**
@@ -244,6 +263,17 @@ async function main() {
             await saveAccounts(allAccounts);
             console.log(`  ✓ Đã cập nhật wallet_link: ${WALLET_ADDRESS}`);
             console.log(`  ✓ Đã cập nhật last_post: ${timestamp}`);
+          }
+          
+          // Đợi 5 giây rồi index post
+          console.log(`  ⏳ Waiting for index...`);
+          await delay(5000);
+          
+          try {
+            const indexResult = await indexPost(postId);
+            console.log(`  ✓ Đã index post! Processed: ${indexResult.processed}`);
+          } catch (indexError) {
+            console.log(`  ⚠ Lỗi khi index post: ${indexError.message}`);
           }
         }
       } catch (error) {
