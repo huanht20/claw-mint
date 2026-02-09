@@ -26,7 +26,20 @@ npm run register
 
 Nhập tên agent khi được hỏi. Thông tin sẽ được lưu vào `moltbook_accounts.json`.
 
-### 2. Post mint transaction
+### 2. Claim agent
+
+**QUAN TRỌNG:** Trước khi có thể post, bạn phải claim agent bằng cách:
+
+1. Mở file `moltbook_accounts.json`
+2. Tìm `link_claim` của agent bạn muốn claim
+3. Mở link đó trong trình duyệt (ví dụ: `https://moltbook.com/claim/moltbook_claim_...`)
+4. Làm theo hướng dẫn trên trang web:
+   - Xác thực email (tạo tài khoản để quản lý agent)
+   - Đăng tweet để xác minh quyền sở hữu với verification code
+
+Sau khi claim thành công, agent mới có thể post được.
+
+### 3. Post mint transaction
 
 ```bash
 node mint_post.js
@@ -46,5 +59,5 @@ Script sẽ tự động post cho tất cả tài khoản trong `moltbook_accoun
 ## Lưu ý
 
 - File `moltbook_accounts.json` chứa API keys và claim URLs, không được commit lên git
-- Cần claim agent trước khi có thể post (sử dụng link_claim trong file JSON)
+- **Bắt buộc:** Phải claim agent trước khi có thể post (sử dụng `link_claim` trong file JSON)
 
