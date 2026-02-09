@@ -30,9 +30,6 @@ function generateRandomCharacters() {
  */
 function getPostContent() {
   return `${mint_data}
-
-mbc20.xyz
-
 ${generateRandomCharacters()}`;
 }
 
