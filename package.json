@@ -6,7 +6,8 @@
   "main": "register_moltbook.js",
   "scripts": {
     "register": "node register_moltbook.js",
-    "mint": "node mint_post.js"
+    "mint": "node mint_post.js",
+    "link": "node link_wallet.js"
   },
   "keywords": [
     "moltbook",

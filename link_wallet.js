@@ -10,11 +10,8 @@ const __dirname = dirname(__filename);
 const ACCOUNTS_FILE = `${__dirname}/moltbook_accounts.json`;
 const POST_API_URL = 'https://www.moltbook.com/api/v1/posts';
 
-// Nội dung post cố định
-const POST_CONTENT = `{"p":"mbc-20","op":"mint","tick":"CLAW","amt":"100"}
-
-mbc20.xyz`;
-
+// Wallet address - biến được khai báo
+let WALLET_ADDRESS = '';
 
 /**
  * Đọc danh sách tài khoản từ file JSON
@@ -48,10 +45,26 @@ function askQuestion(query) {
 }
 
 /**
- * Tạo post trên Moltbook
+ * Tạo nội dung post link wallet
  */
-async function createPost(apiKey) {
+function createLinkContent(wallet) {
+  const linkData = {
+    p: "mbc-20",
+    op: "link",
+    wallet: wallet
+  };
+  
+  return `${JSON.stringify(linkData)}\n\nmbc20.xyz`;
+}
+
+/**
+ * Tạo post link wallet trên Moltbook
+ */
+async function createLinkPost(apiKey, wallet) {
   try {
+    const content = createLinkContent(wallet);
+    const title = `Post this exact message on Moltbook to link yourself to wallet ${wallet}:`;
+
     const response = await fetch(POST_API_URL, {
       method: 'POST',
       headers: {
@@ -60,8 +73,8 @@ async function createPost(apiKey) {
       },
       body: JSON.stringify({
         submolt: "general",
-        title: "MBC-20 Mint: CLAW",
-        content: POST_CONTENT
+        title: title,
+        content: content
       })
     });
 
@@ -98,26 +111,63 @@ async function main() {
       process.exit(1);
     }
 
-    console.log(`\nTìm thấy ${accounts.length} tài khoản:`);
+    // Hiển thị danh sách tài khoản
+    console.log(`\nDanh sách tài khoản:`);
     accounts.forEach((acc, index) => {
       console.log(`  ${index + 1}. ${acc.name}`);
     });
 
-    console.log(`\nNội dung post:`);
-    console.log(POST_CONTENT);
-    console.log(`\nĐang post cho ${accounts.length} tài khoản...\n`);
+    // Hỏi user chọn account
+    const accountInput = await askQuestion(`\nChọn account để link (nhập số 1-${accounts.length}, hoặc 'all' để chọn tất cả): `);
+    
+    let selectedAccounts = [];
+    
+    if (accountInput.trim().toLowerCase() === 'all') {
+      selectedAccounts = accounts;
+      console.log(`\nĐã chọn tất cả ${accounts.length} account(s)`);
+    } else {
+      const accountIndex = parseInt(accountInput.trim()) - 1;
+      if (isNaN(accountIndex) || accountIndex < 0 || accountIndex >= accounts.length) {
+        console.error('✖ Lựa chọn không hợp lệ!');
+        process.exit(1);
+      }
+      selectedAccounts = [accounts[accountIndex]];
+      console.log(`\nĐã chọn account: ${accounts[accountIndex].name}`);
+    }
+
+    // Hỏi wallet address
+    const walletInput = await askQuestion('\nNhập wallet address để link với agent: ');
+    const wallet = walletInput.trim();
+    
+    if (!wallet || wallet === '') {
+      console.error('✖ Wallet address không được để trống!');
+      process.exit(1);
+    }
+
+    // Validate wallet format (basic check - starts with 0x and has 42 chars)
+    if (!wallet.startsWith('0x') || wallet.length !== 42) {
+      console.error('✖ Wallet address không đúng format! (phải bắt đầu với 0x và có 42 ký tự)');
+      process.exit(1);
+    }
+
+    WALLET_ADDRESS = wallet;
+
+    console.log(`\nWallet address: ${WALLET_ADDRESS}`);
+    console.log(`\nNội dung sẽ được post:`);
+    console.log(createLinkContent(WALLET_ADDRESS));
+    console.log(`\nĐang post cho ${selectedAccounts.length} account(s)...\n`);
 
     const results = [];
     let successCount = 0;
     let failCount = 0;
 
     // Post từng tài khoản
-    for (let i = 0; i < accounts.length; i++) {
-      const account = accounts[i];
-      console.log(`[${i + 1}/${accounts.length}] Posting với ${account.name}...`);
+    for (let i = 0; i < selectedAccounts.length; i++) {
+      const account = selectedAccounts[i];
+      console.log(`[${i + 1}/${selectedAccounts.length}] Posting với ${account.name}...`);
 
       try {
-        const result = await createPost(account.api_key);
+        const result = await createLinkPost(account.api_key, WALLET_ADDRESS);
         results.push({
           account: account.name,
           success: true,
@@ -141,7 +191,7 @@ async function main() {
       }
 
       // Delay giữa các request để tránh rate limit
-      if (i < accounts.length - 1) {
+      if (i < selectedAccounts.length - 1) {
         await delay(1000); // 1 giây delay
       }
     }
@@ -149,8 +199,8 @@ async function main() {
     // Tổng kết
     console.log(`\n${'='.repeat(50)}`);
     console.log(`Tổng kết:`);
-    console.log(`  ✓ Thành công: ${successCount}/${accounts.length}`);
-    console.log(`  ✖ Thất bại: ${failCount}/${accounts.length}`);
+    console.log(`  ✓ Thành công: ${successCount}/${selectedAccounts.length}`);
+    console.log(`  ✖ Thất bại: ${failCount}/${selectedAccounts.length}`);
     console.log(`${'='.repeat(50)}\n`);
 
     // Hiển thị chi tiết kết quả
@@ -164,6 +214,8 @@ async function main() {
         }
       });
     }
+
+    console.log(`\nLưu ý: Post này sẽ cho phép wallet owner claim mbc-20 token balances as ERC-20 tokens on Base.`);
 
   } catch (error) {
     console.error('\n✖ Lỗi:', error.message);
