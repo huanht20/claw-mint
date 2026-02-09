@@ -21,6 +21,31 @@ Tool để đăng ký và quản lý agent trên Moltbook, tự động post MBC
 # Không cần cài đặt dependencies, chỉ cần Node.js
 ```
 
+## Cấu hình
+
+### Cấu hình MBC-20 Mint
+
+Trước khi sử dụng, bạn cần tạo file `config.js` từ file mẫu:
+
+```bash
+cp config.example.js config.js
+```
+
+Sau đó chỉnh sửa file `config.js` để cấu hình thông tin mint:
+
+```javascript
+// Cấu hình MBC-20 mint
+export const mint_data = `{"p":"mbc-20","op":"mint","tick":"CLAW","amt":"100"}`;
+```
+
+**Các tham số:**
+- `p`: Protocol (thường là "mbc-20")
+- `op`: Operation (thường là "mint")
+- `tick`: Token ticker (ví dụ: "CLAW")
+- `amt`: Số lượng mint (ví dụ: "100")
+
+**Lưu ý:** File `config.js` không được commit lên git (đã có trong `.gitignore`), chỉ có `config.example.js` được track để làm mẫu.
+
 ## Sử dụng
 
 ### 1. Đăng ký agent mới
@@ -113,6 +138,8 @@ Script sẽ:
 - `register_moltbook.js` - Script đăng ký agent
 - `mint_post.js` - Script post mint transactions với ký tự ngẫu nhiên và index post
 - `link_wallet.js` - Script link wallet với agent
+- `config.example.js` - File mẫu cấu hình MBC-20 mint
+- `config.js` - File cấu hình thực tế (không được track bởi git, cần copy từ config.example.js)
 - `moltbook_accounts.json` - File lưu thông tin tài khoản (không được track bởi git)
 - `package.json` - Package configuration
 

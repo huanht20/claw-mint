@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import readline from 'readline';
+import { mint_data } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,7 +29,7 @@ function generateRandomCharacters() {
  * Tạo nội dung post với ký tự random mới mỗi lần
  */
 function getPostContent() {
-  return `{"p":"mbc-20","op":"mint","tick":"CLAW","amt":"100"}
+  return `${mint_data}
 
 mbc20.xyz
 

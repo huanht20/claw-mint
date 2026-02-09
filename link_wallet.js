@@ -155,17 +155,44 @@ async function main() {
       process.exit(1);
     }
 
-    // Lọc chỉ lấy các account có wallet_link là null
-    const accounts = allAccounts.filter(acc => acc.wallet_link === null || acc.wallet_link === undefined);
+    // Lọc chỉ lấy các account đủ điều kiện post:
+    // 1. wallet_link là null (chưa link)
+    // 2. status !== 0 (account đang bật)
+    // 3. Đủ delay (nếu có last_post)
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+    const accounts = allAccounts.filter(acc => {
+      // Bỏ qua nếu đã link wallet
+      if (acc.wallet_link !== null && acc.wallet_link !== undefined) {
+        return false;
+      }
+      
+      // Bỏ qua nếu status = 0
+      if (acc.status === 0) {
+        return false;
+      }
+      
+      // Kiểm tra delay nếu có last_post
+      const lastPost = acc.last_post || 0;
+      if (lastPost > 0) {
+        const delayMinutes = acc.delay !== undefined ? acc.delay : 120;
+        const delaySeconds = delayMinutes * 60;
+        const timeSinceLastPost = currentTimestamp - lastPost;
+        if (timeSinceLastPost < delaySeconds) {
+          return false; // Chưa đủ delay
+        }
+      }
+      
+      return true;
+    });
     
     if (accounts.length === 0) {
-      console.error('✖ Không có tài khoản nào chưa link wallet!');
-      console.error(`  Tất cả tài khoản đã được link wallet.`);
+      console.error('✖ Không có tài khoản nào đủ điều kiện để link wallet!');
+      console.error(`  Các tài khoản có thể đã link wallet, bị tắt (status = 0), hoặc chưa đủ delay.`);
       process.exit(1);
     }
 
-    // Hiển thị danh sách tài khoản chưa link wallet
-    console.log(`\nDanh sách tài khoản chưa link wallet (${accounts.length}/${allAccounts.length}):`);
+    // Hiển thị danh sách tài khoản đủ điều kiện
+    console.log(`\nDanh sách tài khoản đủ điều kiện link wallet (${accounts.length}/${allAccounts.length}):`);
     accounts.forEach((acc, index) => {
       console.log(`  ${index + 1}. ${acc.name}`);
     });
