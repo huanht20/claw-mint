@@ -1,0 +1,19 @@
+{
+  "name": "mint-claw",
+  "version": "1.0.0",
+  "description": "Moltbook registration tool",
+  "type": "module",
+  "main": "register_moltbook.js",
+  "scripts": {
+    "register": "node register_moltbook.js",
+    "mint": "node mint_post.js"
+  },
+  "keywords": [
+    "moltbook",
+    "agent",
+    "registration"
+  ],
+  "author": "",
+  "license": "MIT"
+}
+
