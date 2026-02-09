@@ -10,10 +10,29 @@ const __dirname = dirname(__filename);
 const ACCOUNTS_FILE = `${__dirname}/moltbook_accounts.json`;
 const POST_API_URL = 'https://www.moltbook.com/api/v1/posts';
 
-// Nội dung post cố định
-const POST_CONTENT = `{"p":"mbc-20","op":"mint","tick":"CLAW","amt":"100"}
+/**
+ * Tạo 10 ký tự ngẫu nhiên gồm số và chữ
+ */
+function generateRandomCharacters() {
+  const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  let result = '';
+  for (let i = 0; i < 10; i++) {
+    const randomIndex = Math.floor(Math.random() * chars.length);
+    result += chars[randomIndex];
+  }
+  return result;
+}
 
-mbc20.xyz`;
+/**
+ * Tạo nội dung post với ký tự random mới mỗi lần
+ */
+function getPostContent() {
+  return `{"p":"mbc-20","op":"mint","tick":"CLAW","amt":"100"}
+
+mbc20.xyz
+
+${generateRandomCharacters()}`;
+}
 
 
 /**
@@ -52,17 +71,27 @@ function askQuestion(query) {
  */
 async function createPost(apiKey) {
   try {
+    const title = `MBC-20 Mint: CLAW ${generateRandomCharacters()}`;
+    const content = getPostContent();
+    
+    const body = {
+      submolt: "general",
+      title: title,
+      content: content
+    };
+    
+    // In body trước khi post
+    console.log('\nBody sẽ post:');
+    console.log(JSON.stringify(body, null, 2));
+    console.log('---\n');
+    
     const response = await fetch(POST_API_URL, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        submolt: "general",
-        title: "MBC-20 Mint: CLAW",
-        content: POST_CONTENT
-      })
+      body: JSON.stringify(body)
     });
 
     const data = await response.json();
@@ -165,8 +194,6 @@ async function main() {
       console.log(`  ${index + 1}. ${acc.name}`);
     });
 
-    console.log(`\nNội dung post:`);
-    console.log(POST_CONTENT);
 
     if (repeatMinutes && repeatMinutes > 0) {
       const repeatMs = repeatMinutes * 60 * 1000; // Chuyển phút sang milliseconds
