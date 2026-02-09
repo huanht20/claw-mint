@@ -1,4 +1,4 @@
-import { readFile } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -30,6 +30,18 @@ async function loadAccounts() {
 }
 
 /**
+ * Lưu danh sách tài khoản vào file JSON
+ */
+async function saveAccounts(accounts) {
+  try {
+    await writeFile(ACCOUNTS_FILE, JSON.stringify(accounts, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Error saving accounts:', error.message);
+    throw error;
+  }
+}
+
+/**
  * Hỏi input từ console
  */
 function askQuestion(query) {
@@ -42,6 +54,19 @@ function askQuestion(query) {
     rl.close();
     resolve(ans);
   }));
+}
+
+/**
+ * Tạo 10 ký tự ngẫu nhiên gồm số và chữ
+ */
+function generateRandomCharacters() {
+  const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  let result = '';
+  for (let i = 0; i < 10; i++) {
+    const randomIndex = Math.floor(Math.random() * chars.length);
+    result += chars[randomIndex];
+  }
+  return result;
 }
 
 /**
@@ -63,7 +88,7 @@ function createLinkContent(wallet) {
 async function createLinkPost(apiKey, wallet) {
   try {
     const content = createLinkContent(wallet);
-    const title = `Post this exact message on Moltbook to link yourself to wallet ${wallet}:`;
+    const title = `Link wallet ${generateRandomCharacters()}`;
 
     const response = await fetch(POST_API_URL, {
       method: 'POST',
@@ -103,16 +128,25 @@ function delay(ms) {
 async function main() {
   try {
     // Đọc danh sách tài khoản
-    const accounts = await loadAccounts();
+    const allAccounts = await loadAccounts();
     
-    if (accounts.length === 0) {
+    if (allAccounts.length === 0) {
       console.error('✖ Không có tài khoản nào trong file!');
       console.error(`  Hãy chạy: node register_moltbook.js để đăng ký tài khoản trước.`);
       process.exit(1);
     }
 
-    // Hiển thị danh sách tài khoản
-    console.log(`\nDanh sách tài khoản:`);
+    // Lọc chỉ lấy các account có wallet_link là null
+    const accounts = allAccounts.filter(acc => acc.wallet_link === null || acc.wallet_link === undefined);
+    
+    if (accounts.length === 0) {
+      console.error('✖ Không có tài khoản nào chưa link wallet!');
+      console.error(`  Tất cả tài khoản đã được link wallet.`);
+      process.exit(1);
+    }
+
+    // Hiển thị danh sách tài khoản chưa link wallet
+    console.log(`\nDanh sách tài khoản chưa link wallet (${accounts.length}/${allAccounts.length}):`);
     accounts.forEach((acc, index) => {
       console.log(`  ${index + 1}. ${acc.name}`);
     });
@@ -164,21 +198,53 @@ async function main() {
     // Post từng tài khoản
     for (let i = 0; i < selectedAccounts.length; i++) {
       const account = selectedAccounts[i];
+      
+      // Kiểm tra delay - nếu chưa đủ thời gian thì bỏ qua
+      const delayMinutes = account.delay !== undefined ? account.delay : 120; // Mặc định 120 phút
+      const delaySeconds = delayMinutes * 60; // Chuyển từ phút sang giây
+      const currentTimestamp = Math.floor(Date.now() / 1000); // Unix timestamp hiện tại (giây)
+      const lastPost = account.last_post || 0;
+      
+      if (lastPost > 0) {
+        const timeSinceLastPost = currentTimestamp - lastPost;
+        if (timeSinceLastPost < delaySeconds) {
+          const remainingMinutes = Math.ceil((delaySeconds - timeSinceLastPost) / 60);
+          console.log(`[${i + 1}/${selectedAccounts.length}] Bỏ qua ${account.name} (chưa đủ delay, còn ${remainingMinutes} phút)`);
+          continue;
+        }
+      }
+      
       console.log(`[${i + 1}/${selectedAccounts.length}] Posting với ${account.name}...`);
 
       try {
         const result = await createLinkPost(account.api_key, WALLET_ADDRESS);
+        const postId = result.post?.id;
+        
         results.push({
           account: account.name,
           success: true,
-          post_id: result.post?.id,
+          post_id: postId,
           post_url: result.post?.url,
           verification_required: result.verification_required
         });
         successCount++;
-        console.log(`  ✓ Thành công! Post ID: ${result.post?.id}`);
+        console.log(`  ✓ Thành công! Post ID: ${postId}`);
         if (result.verification_required) {
           console.log(`  ⚠ Cần verification để publish`);
+        }
+        
+        // Cập nhật wallet_link và last_post trong allAccounts nếu post thành công
+        if (postId) {
+          const accountIndex = allAccounts.findIndex(acc => acc.name === account.name);
+          if (accountIndex >= 0) {
+            const timestamp = Math.floor(Date.now() / 1000); // Unix timestamp (giây)
+            allAccounts[accountIndex].wallet_link = WALLET_ADDRESS;
+            allAccounts[accountIndex].last_post = timestamp;
+            // Lưu lại file JSON
+            await saveAccounts(allAccounts);
+            console.log(`  ✓ Đã cập nhật wallet_link: ${WALLET_ADDRESS}`);
+            console.log(`  ✓ Đã cập nhật last_post: ${timestamp}`);
+          }
         }
       } catch (error) {
         results.push({

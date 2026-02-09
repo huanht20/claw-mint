@@ -93,11 +93,6 @@ async function createPost(apiKey) {
       content: content
     };
     
-    // In body trước khi post
-    console.log('\nBody sẽ post:');
-    console.log(JSON.stringify(body, null, 2));
-    console.log('---\n');
-    
     const response = await fetch(POST_API_URL, {
       method: 'POST',
       headers: {
@@ -166,6 +161,21 @@ async function postToAllAccounts(accounts, iteration = 1) {
     if (account.status === 0) {
       console.log(`[${i + 1}/${accounts.length}] Bỏ qua ${account.name} (status = 0)`);
       continue;
+    }
+    
+    // Kiểm tra delay - nếu chưa đủ thời gian thì bỏ qua
+    const delayMinutes = account.delay !== undefined ? account.delay : 120; // Mặc định 120 phút
+    const delaySeconds = delayMinutes * 60; // Chuyển từ phút sang giây
+    const currentTimestamp = Math.floor(Date.now() / 1000); // Unix timestamp hiện tại (giây)
+    const lastPost = account.last_post || 0;
+    
+    if (lastPost > 0) {
+      const timeSinceLastPost = currentTimestamp - lastPost;
+      if (timeSinceLastPost < delaySeconds) {
+        const remainingMinutes = Math.ceil((delaySeconds - timeSinceLastPost) / 60);
+        console.log(`[${i + 1}/${accounts.length}] Bỏ qua ${account.name} (chưa đủ delay, còn ${remainingMinutes} phút)`);
+        continue;
+      }
     }
     
     console.log(`[${i + 1}/${accounts.length}] Posting với ${account.name}...`);

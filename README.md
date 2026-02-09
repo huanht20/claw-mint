@@ -9,8 +9,10 @@ Tool để đăng ký và quản lý agent trên Moltbook, tự động post MBC
 - Thêm ký tự ngẫu nhiên vào nội dung và tiêu đề post (mỗi lần post khác nhau)
 - Quản lý trạng thái account (status: 0 = tắt, 1 = bật)
 - Tracking thời gian post cuối cùng (last_post)
+- Quản lý delay giữa các lần post (mặc định 120 phút)
+- Tự động kiểm tra delay trước khi post (bỏ qua nếu chưa đủ thời gian)
 - Tự động index post sau khi post thành công (đợi 5 giây)
-- Link wallet với agent để claim tokens
+- Link wallet với agent để claim tokens (chỉ hiển thị account chưa link)
 - Lưu thông tin tài khoản vào file JSON (không được track bởi git)
 
 ## Cài đặt
@@ -32,6 +34,8 @@ npm run register
 Nhập tên agent khi được hỏi. Thông tin sẽ được lưu vào `moltbook_accounts.json` với:
 - `status: 1` (mặc định, account sẽ được post)
 - `last_post: 0` (timestamp của lần post cuối, 0 = chưa post)
+- `wallet_link: null` (wallet address đã link, null = chưa link)
+- `delay: 120` (thời gian delay giữa các lần post, tính bằng phút)
 
 ### 2. Claim agent
 
@@ -68,14 +72,15 @@ Script sẽ tự động post cho tất cả tài khoản có `status !== 0` tro
 
 **Tính năng:**
 - Mỗi lần post sẽ có ký tự ngẫu nhiên (10 ký tự) trong nội dung và tiêu đề
-- Hiển thị body JSON trước khi post
 - Sau khi post thành công, tự động cập nhật `last_post` với timestamp hiện tại
 - Đợi 5 giây rồi tự động gọi API index post
 - Bỏ qua các account có `status = 0`
+- **Kiểm tra delay:** Nếu thời gian từ lần post cuối < delay (phút), sẽ bỏ qua và hiển thị thời gian còn lại
 
 **Cách quản lý account:**
 - Để tắt một account, sửa `status: 0` trong `moltbook_accounts.json`
 - Để bật lại, sửa `status: 1`
+- Để thay đổi delay, sửa `delay: <số_phút>` (ví dụ: `delay: 60` = 60 phút)
 
 **Chạy:**
 - Nếu không có tham số: chạy 1 lần và dừng
@@ -91,12 +96,17 @@ npm run link
 ```
 
 Script sẽ:
-1. Hiển thị danh sách tất cả accounts
+1. **Chỉ hiển thị các account chưa link wallet** (wallet_link = null)
 2. Hỏi bạn chọn account nào để link (nhập số hoặc 'all' để chọn tất cả)
 3. Hỏi wallet address (ví dụ: `0xeBac9445C00F1B1967b527DdC94FeCF72283725C`)
-4. Tự động post message link wallet cho account đã chọn
+4. Kiểm tra delay trước khi post (bỏ qua nếu chưa đủ thời gian)
+5. Tự động post message link wallet cho account đã chọn
+6. Sau khi post thành công, tự động cập nhật `wallet_link` và `last_post`
 
-Post này sẽ cho phép wallet owner claim mbc-20 token balances as ERC-20 tokens on Base.
+**Tính năng:**
+- Tiêu đề post: "Link wallet {10 ký tự ngẫu nhiên}"
+- Nội dung: JSON với format `{"p":"mbc-20","op":"link","wallet":"..."}` + `mbc20.xyz`
+- Post này sẽ cho phép wallet owner claim mbc-20 token balances as ERC-20 tokens on Base
 
 ## Cấu trúc file
 
@@ -115,19 +125,27 @@ Post này sẽ cho phép wallet owner claim mbc-20 token balances as ERC-20 toke
     "api_key": "moltbook_sk_...",
     "link_claim": "https://moltbook.com/claim/...",
     "status": 1,
-    "last_post": 1735689600
+    "last_post": 1735689600,
+    "wallet_link": "0xeBac9445C00F1B1967b527DdC94FeCF72283725C",
+    "delay": 120
   }
 ]
 ```
 
+**Các field:**
 - `status`: 0 = tắt (không post), 1 = bật (sẽ post)
 - `last_post`: Unix timestamp (giây) của lần post cuối cùng, 0 = chưa post
+- `wallet_link`: Wallet address đã link, `null` = chưa link wallet
+- `delay`: Thời gian delay giữa các lần post (tính bằng phút), mặc định 120 phút
 
 ## Lưu ý
 
 - File `moltbook_accounts.json` chứa API keys và claim URLs, không được commit lên git
 - **Bắt buộc:** Phải claim agent trước khi có thể post (sử dụng `link_claim` trong file JSON)
 - Mỗi lần post sẽ có nội dung và tiêu đề khác nhau nhờ ký tự ngẫu nhiên
-- Script tự động cập nhật `last_post` sau mỗi lần post thành công
+- Script tự động cập nhật `last_post` sau mỗi lần post thành công (mint post và link wallet)
+- **Delay:** Script sẽ tự động kiểm tra và bỏ qua account nếu chưa đủ thời gian delay kể từ lần post cuối
 - Để tạm dừng một account, đặt `status: 0` trong file JSON
+- Để thay đổi delay, sửa `delay: <số_phút>` trong file JSON (ví dụ: `delay: 60` = 60 phút)
+- Link wallet chỉ hiển thị các account chưa link wallet (`wallet_link = null`)
 
