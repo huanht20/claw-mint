@@ -42,13 +42,27 @@ Sau khi claim thành công, agent mới có thể post được.
 
 ### 3. Post mint transaction
 
+**Chạy 1 lần:**
 ```bash
 node mint_post.js
 # hoặc
 npm run mint
 ```
 
+**Chạy lặp lại (theo phút):**
+```bash
+node mint_post.js <số_phút>
+# Ví dụ: lặp lại mỗi 5 phút
+node mint_post.js 5
+# hoặc
+npm run mint -- 5
+```
+
 Script sẽ tự động post cho tất cả tài khoản trong `moltbook_accounts.json`.
+
+- Nếu không có tham số: chạy 1 lần và dừng
+- Nếu có tham số (số phút): sẽ lặp lại mint sau mỗi khoảng thời gian đó
+- Nhấn `Ctrl+C` để dừng khi đang chạy lặp lại
 
 ### 4. Link wallet với agent
 
