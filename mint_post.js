@@ -1,4 +1,4 @@
-import { readFile } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -9,6 +9,7 @@ const __dirname = dirname(__filename);
 
 const ACCOUNTS_FILE = `${__dirname}/moltbook_accounts.json`;
 const POST_API_URL = 'https://www.moltbook.com/api/v1/posts';
+const INDEX_POST_API_URL = 'https://mbc20.xyz/api/index-post';
 
 /**
  * Tạo 10 ký tự ngẫu nhiên gồm số và chữ
@@ -48,6 +49,18 @@ async function loadAccounts() {
   } catch (error) {
     console.error('Error loading accounts:', error.message);
     return [];
+  }
+}
+
+/**
+ * Lưu danh sách tài khoản vào file JSON
+ */
+async function saveAccounts(accounts) {
+  try {
+    await writeFile(ACCOUNTS_FILE, JSON.stringify(accounts, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Error saving accounts:', error.message);
+    throw error;
   }
 }
 
@@ -114,6 +127,24 @@ function delay(ms) {
 }
 
 /**
+ * Index post sau khi đã post thành công
+ */
+async function indexPost(postId) {
+  try {
+    const response = await fetch(`${INDEX_POST_API_URL}?id=${postId}`);
+    const data = await response.json();
+    
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || `HTTP ${response.status}: ${data.message || 'Unknown error'}`);
+    }
+    
+    return data;
+  } catch (error) {
+    throw new Error(`Index post failed: ${error.message}`);
+  }
+}
+
+/**
  * Post cho tất cả accounts
  */
 async function postToAllAccounts(accounts, iteration = 1) {
@@ -130,21 +161,56 @@ async function postToAllAccounts(accounts, iteration = 1) {
   // Post từng tài khoản
   for (let i = 0; i < accounts.length; i++) {
     const account = accounts[i];
+    
+    // Bỏ qua account có status = 0
+    if (account.status === 0) {
+      console.log(`[${i + 1}/${accounts.length}] Bỏ qua ${account.name} (status = 0)`);
+      continue;
+    }
+    
     console.log(`[${i + 1}/${accounts.length}] Posting với ${account.name}...`);
 
     try {
       const result = await createPost(account.api_key);
+      const postId = result.post?.id;
+      
       results.push({
         account: account.name,
         success: true,
-        post_id: result.post?.id,
+        post_id: postId,
         post_url: result.post?.url,
         verification_required: result.verification_required
       });
       successCount++;
-      console.log(`  ✓ Thành công! Post ID: ${result.post?.id}`);
+      console.log(`  ✓ Thành công! Post ID: ${postId}`);
       if (result.verification_required) {
         console.log(`  ⚠ Cần verification để publish`);
+      }
+      
+      // Cập nhật last_post nếu có postId
+      if (postId) {
+        const timestamp = Math.floor(Date.now() / 1000); // Unix timestamp (giây)
+        account.last_post = timestamp;
+        
+        // Tìm và cập nhật account trong accounts array
+        const accountIndex = accounts.findIndex(acc => acc.name === account.name);
+        if (accountIndex >= 0) {
+          accounts[accountIndex].last_post = timestamp;
+          // Lưu lại file JSON
+          await saveAccounts(accounts);
+          console.log(`  ✓ Đã cập nhật last_post: ${timestamp}`);
+        }
+        
+        // Đợi 5 giây rồi index post
+        console.log(`  ⏳ Waiting for index...`);
+        await delay(5000);
+        
+        try {
+          const indexResult = await indexPost(postId);
+          console.log(`  ✓ Đã index post! Processed: ${indexResult.processed}`);
+        } catch (indexError) {
+          console.log(`  ⚠ Lỗi khi index post: ${indexError.message}`);
+        }
       }
     } catch (error) {
       results.push({
@@ -162,11 +228,14 @@ async function postToAllAccounts(accounts, iteration = 1) {
     }
   }
 
+  // Tính số account active (không tính account có status = 0)
+  const activeAccountsCount = accounts.filter(acc => acc.status !== 0).length;
+  
   // Tổng kết
   console.log(`\n${'='.repeat(50)}`);
   console.log(`Tổng kết lần ${iteration}:`);
-  console.log(`  ✓ Thành công: ${successCount}/${accounts.length}`);
-  console.log(`  ✖ Thất bại: ${failCount}/${accounts.length}`);
+  console.log(`  ✓ Thành công: ${successCount}/${activeAccountsCount}`);
+  console.log(`  ✖ Thất bại: ${failCount}/${activeAccountsCount}`);
   console.log(`${'='.repeat(50)}\n`);
 
   return { results, successCount, failCount };
@@ -189,10 +258,20 @@ async function main() {
       process.exit(1);
     }
 
+    // Lọc các account active (status !== 0)
+    const activeAccounts = accounts.filter(acc => acc.status !== 0);
+    const inactiveCount = accounts.length - activeAccounts.length;
+    
     console.log(`\nTìm thấy ${accounts.length} tài khoản:`);
     accounts.forEach((acc, index) => {
-      console.log(`  ${index + 1}. ${acc.name}`);
+      const statusText = acc.status === 0 ? ' (status = 0 - bỏ qua)' : '';
+      console.log(`  ${index + 1}. ${acc.name}${statusText}`);
     });
+    
+    if (inactiveCount > 0) {
+      console.log(`\n⚠ ${inactiveCount} tài khoản sẽ bị bỏ qua (status = 0)`);
+    }
+    console.log(`✓ ${activeAccounts.length} tài khoản sẽ được post`);
 
 
     if (repeatMinutes && repeatMinutes > 0) {
@@ -221,7 +300,8 @@ async function main() {
       }
     } else {
       // Chạy 1 lần như bình thường
-      console.log(`\nĐang post cho ${accounts.length} tài khoản...\n`);
+      const activeAccounts = accounts.filter(acc => acc.status !== 0);
+      console.log(`\nĐang post cho ${activeAccounts.length} tài khoản...\n`);
       await postToAllAccounts(accounts, 1);
     }
 

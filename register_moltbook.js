@@ -64,7 +64,9 @@ async function registerMoltbookAccount(name, description = null) {
     return {
       name: data.agent.name,
       api_key: data.agent.api_key,
-      link_claim: data.agent.claim_url
+      link_claim: data.agent.claim_url,
+      status: 1,
+      last_post: 0
     };
   } catch (error) {
     throw new Error(`Registration failed: ${error.message}`);
@@ -116,8 +118,13 @@ async function main() {
     const existingIndex = accounts.findIndex(acc => acc.name === newAccount.name);
     
     if (existingIndex >= 0) {
-      // Cập nhật tài khoản đã tồn tại
-      accounts[existingIndex] = newAccount;
+      // Cập nhật tài khoản đã tồn tại (giữ nguyên status và last_post nếu đã có)
+      const existingAccount = accounts[existingIndex];
+      accounts[existingIndex] = {
+        ...newAccount,
+        status: existingAccount.status !== undefined ? existingAccount.status : 1,
+        last_post: existingAccount.last_post !== undefined ? existingAccount.last_post : 0
+      };
       console.log(`  Đã cập nhật tài khoản: ${newAccount.name}`);
     } else {
       // Thêm tài khoản mới
