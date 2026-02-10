@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import readline from 'readline';
+import { DELAY_REGIS } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -61,6 +62,8 @@ async function registerMoltbookAccount(name, description = null) {
       throw new Error(data.error || `HTTP ${response.status}: ${data.message || 'Unknown error'}`);
     }
 
+    const registeredAt = Math.floor(Date.now() / 1000); // Unix timestamp (giây)
+    
     return {
       name: data.agent.name,
       api_key: data.agent.api_key,
@@ -68,7 +71,8 @@ async function registerMoltbookAccount(name, description = null) {
       status: 1,
       last_post: 0,
       wallet_link: null,
-      delay: 120
+      delay: DELAY_REGIS,
+      registered_at: registeredAt
     };
   } catch (error) {
     throw new Error(`Registration failed: ${error.message}`);
@@ -120,14 +124,15 @@ async function main() {
     const existingIndex = accounts.findIndex(acc => acc.name === newAccount.name);
     
     if (existingIndex >= 0) {
-      // Cập nhật tài khoản đã tồn tại (giữ nguyên status, last_post, wallet_link và delay nếu đã có)
+      // Cập nhật tài khoản đã tồn tại (giữ nguyên status, last_post, wallet_link, delay và registered_at nếu đã có)
       const existingAccount = accounts[existingIndex];
       accounts[existingIndex] = {
         ...newAccount,
         status: existingAccount.status !== undefined ? existingAccount.status : 1,
         last_post: existingAccount.last_post !== undefined ? existingAccount.last_post : 0,
         wallet_link: existingAccount.wallet_link !== undefined ? existingAccount.wallet_link : null,
-        delay: existingAccount.delay !== undefined ? existingAccount.delay : 120
+        delay: existingAccount.delay !== undefined ? existingAccount.delay : DELAY_REGIS,
+        registered_at: existingAccount.registered_at !== undefined ? existingAccount.registered_at : newAccount.registered_at
       };
       console.log(`  Đã cập nhật tài khoản: ${newAccount.name}`);
     } else {

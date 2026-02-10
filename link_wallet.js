@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import readline from 'readline';
+import { DELAY_AFTER_DAY } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -15,13 +16,51 @@ const INDEX_POST_API_URL = 'https://mbc20.xyz/api/index-post';
 let WALLET_ADDRESS = '';
 
 /**
+ * Cập nhật delay dựa trên thời gian đăng ký
+ * Nếu registered_at > 24 giờ thì update delay = DELAY_AFTER_DAY
+ */
+async function updateDelayBasedOnRegistration(accounts) {
+  const currentTimestamp = Math.floor(Date.now() / 1000); // Unix timestamp (giây)
+  const oneDayInSeconds = 24 * 60 * 60; // 24 giờ = 86400 giây
+  let updated = false;
+  
+  for (let i = 0; i < accounts.length; i++) {
+    const account = accounts[i];
+    
+    // Chỉ xử lý nếu có registered_at
+    if (account.registered_at && typeof account.registered_at === 'number') {
+      const timeSinceRegistration = currentTimestamp - account.registered_at;
+      
+      // Nếu đã qua 24 giờ và delay chưa được update
+      if (timeSinceRegistration > oneDayInSeconds) {
+        // Chỉ update nếu delay hiện tại khác DELAY_AFTER_DAY
+        if (account.delay !== DELAY_AFTER_DAY) {
+          account.delay = DELAY_AFTER_DAY;
+          updated = true;
+        }
+      }
+    }
+  }
+  
+  // Lưu lại nếu có thay đổi
+  if (updated) {
+    await saveAccounts(accounts);
+  }
+  
+  return accounts;
+}
+
+/**
  * Đọc danh sách tài khoản từ file JSON
  */
 async function loadAccounts() {
   try {
     if (existsSync(ACCOUNTS_FILE)) {
       const data = await readFile(ACCOUNTS_FILE, 'utf-8');
-      return JSON.parse(data);
+      const accounts = JSON.parse(data);
+      
+      // Cập nhật delay dựa trên thời gian đăng ký
+      return await updateDelayBasedOnRegistration(accounts);
     }
     return [];
   } catch (error) {
@@ -293,14 +332,18 @@ async function main() {
           }
           
           // Đợi 5 giây rồi index post
-          console.log(`  ⏳ Waiting for index...`);
+          console.log(`  ⏳ Đang index post...`);
           await delay(5000);
           
           try {
             const indexResult = await indexPost(postId);
-            console.log(`  ✓ Đã index post! Processed: ${indexResult.processed}`);
+            if (indexResult.success !== false && indexResult.processed) {
+              console.log(`  \x1b[32m✓ Đã index post thành công! Processed: ${indexResult.processed || 'N/A'}\x1b[0m`);
+            } else {
+              console.log(`  \x1b[31m✖ Index post thất bại: ${indexResult.error || indexResult.message || 'Unknown error'}\x1b[0m`);
+            }
           } catch (indexError) {
-            console.log(`  ⚠ Lỗi khi index post: ${indexError.message}`);
+            console.log(`  \x1b[31m✖ Lỗi khi index post: ${indexError.message}\x1b[0m`);
           }
         }
       } catch (error) {
@@ -316,6 +359,11 @@ async function main() {
       // Delay giữa các request để tránh rate limit
       if (i < selectedAccounts.length - 1) {
         await delay(1000); // 1 giây delay
+      }
+      
+      // Phân cách giữa các tài khoản
+      if (i < selectedAccounts.length - 1) {
+        console.log(`\n${'─'.repeat(70)}\n`);
       }
     }
 
