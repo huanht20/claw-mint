@@ -120,6 +120,8 @@ function askQuestion(query) {
  * Sử dụng AI (ChatGPT) để giải challenge
  */
 async function solveChallengeWithAI(challenge, instructions, accountName = '') {
+  const model = 'gpt-5.2'; // Model name để track stats
+  
   try {
     if (!OPENAI_API_KEY || OPENAI_API_KEY.trim() === '') {
       throw new Error('OpenAI API key chưa được cấu hình');
@@ -129,7 +131,7 @@ async function solveChallengeWithAI(challenge, instructions, accountName = '') {
 Instructions: ${instructions}`;
 
     const requestBody = {
-      model: 'gpt-5.2',
+      model: model,
       messages: [
         {
           role: 'system',
@@ -202,6 +204,9 @@ Instructions: ${instructions}`;
       formatted_answer: formattedAnswer
     });
 
+    // Không update AI stats ở đây, sẽ update sau khi verify xong
+    // (thành công hoặc thất bại)
+
     return formattedAnswer;
   } catch (error) {
     // Log lỗi nếu có
@@ -210,6 +215,11 @@ Instructions: ${instructions}`;
       instructions: instructions,
       error: error.message
     });
+    
+    // Update AI stats - thất bại (chỉ update nếu đã gọi API, không phải lỗi trước khi gọi)
+    if (error.message && !error.message.includes('OpenAI API key chưa được cấu hình')) {
+      await updateAIStats(false, model);
+    }
     
     throw new Error(`AI solve failed: ${error.message}`);
   }
@@ -233,6 +243,95 @@ function getLocalTimeString() {
   const timezoneSign = timezoneOffset >= 0 ? '+' : '-';
   
   return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}${timezoneSign}${timezoneHours}:${timezoneMinutes}`;
+}
+
+/**
+ * Load AI stats từ file
+ */
+async function loadAIStats() {
+  try {
+    const logDir = `${__dirname}/log`;
+    if (!existsSync(logDir)) {
+      await mkdir(logDir, { recursive: true });
+    }
+    
+    const statsFile = `${logDir}/ai_stats.json`;
+    if (existsSync(statsFile)) {
+      const data = await readFile(statsFile, 'utf-8');
+      return JSON.parse(data);
+    }
+    
+    // Tạo stats mặc định
+    return {
+      model: 'gpt-5.2',
+      total_attempts: 0,
+      successful_attempts: 0,
+      failed_attempts: 0,
+      success_rate: 0,
+      last_updated: null
+    };
+  } catch (error) {
+    console.error(`  ⚠ Lỗi khi load AI stats: ${error.message}`);
+    return {
+      model: 'gpt-5.2',
+      total_attempts: 0,
+      successful_attempts: 0,
+      failed_attempts: 0,
+      success_rate: 0,
+      last_updated: null
+    };
+  }
+}
+
+/**
+ * Save AI stats vào file
+ */
+async function saveAIStats(stats) {
+  try {
+    const logDir = `${__dirname}/log`;
+    if (!existsSync(logDir)) {
+      await mkdir(logDir, { recursive: true });
+    }
+    
+    const statsFile = `${logDir}/ai_stats.json`;
+    stats.last_updated = getLocalTimeString();
+    stats.success_rate = stats.total_attempts > 0 
+      ? ((stats.successful_attempts / stats.total_attempts) * 100).toFixed(2) 
+      : 0;
+    
+    await writeFile(statsFile, JSON.stringify(stats, null, 2), 'utf-8');
+  } catch (error) {
+    console.error(`  ⚠ Lỗi khi save AI stats: ${error.message}`);
+  }
+}
+
+/**
+ * Update AI stats (thành công hoặc thất bại)
+ */
+async function updateAIStats(success = true, model = 'gpt-5.2') {
+  try {
+    const stats = await loadAIStats();
+    
+    // Nếu model thay đổi, reset stats
+    if (stats.model !== model) {
+      stats.model = model;
+      stats.total_attempts = 0;
+      stats.successful_attempts = 0;
+      stats.failed_attempts = 0;
+    }
+    
+    stats.total_attempts += 1;
+    
+    if (success) {
+      stats.successful_attempts += 1;
+    } else {
+      stats.failed_attempts += 1;
+    }
+    
+    await saveAIStats(stats);
+  } catch (error) {
+    console.error(`  ⚠ Lỗi khi update AI stats: ${error.message}`);
+  }
 }
 
 /**
@@ -546,6 +645,12 @@ async function postToAllAccounts(accounts, iteration = 1) {
           
           if (verifyResult.success) {
             console.log(`  \x1b[32m✓ Verification thành công! Post ID: ${postId}\x1b[0m`);
+            
+            // Nếu là AI answer và verify thành công, update AI stats là success
+            if (isAIAnswer) {
+              await updateAIStats(true, 'gpt-5.2');
+            }
+            
             results.push({
               account: account.name,
               success: true,
@@ -578,6 +683,11 @@ async function postToAllAccounts(accounts, iteration = 1) {
             const errorMsg = verifyResult.error || verifyResult.message || 'Unknown error';
             console.log(`  ✖ Verification thất bại: ${errorMsg}`);
             
+            // Nếu là AI answer và verify thất bại, update AI stats là failed
+            if (isAIAnswer) {
+              await updateAIStats(false, 'gpt-5.2');
+            }
+            
             // Print toàn bộ verify response
             console.log(`\n  ${'='.repeat(60)}`);
             console.log(`  VERIFICATION FAILED - RESPONSE:`);
@@ -592,8 +702,26 @@ async function postToAllAccounts(accounts, iteration = 1) {
               challenge: verification.challenge,
               answer: answer.trim(),
               verification_code: verification.code,
-              verify_response: verifyResult
+              verify_response: verifyResult,
+              is_ai: isAIAnswer
             });
+            
+            // Index post ngay cả khi verify thất bại (nếu có postId)
+            if (postId) {
+              console.log(`  ⏳ Đang index mint...`);
+              await delay(5000); // Đợi 5 giây trước khi index
+              
+              try {
+                const indexResult = await indexPost(postId, account);
+                if (indexResult.success !== false && indexResult.processed) {
+                  console.log(`  \x1b[32m✓ Đã index post thành công! Processed: ${indexResult.processed || 'N/A'}\x1b[0m`);
+                } else {
+                  console.log(`  \x1b[31m✖ Index post thất bại: ${indexResult.error || indexResult.message || 'Unknown error'}\x1b[0m`);
+                }
+              } catch (indexError) {
+                console.log(`  \x1b[31m✖ Lỗi khi index post: ${indexError.message}\x1b[0m`);
+              }
+            }
             
             results.push({
               account: account.name,
@@ -786,6 +914,26 @@ async function postToAllAccounts(accounts, iteration = 1) {
 
   // Tổng số lần đã post (thành công + thất bại)
   const totalPosts = successCount + failCount;
+  
+  // Load và lưu AI stats vào log (không hiển thị console)
+  if (USE_AI && OPENAI_API_KEY && OPENAI_API_KEY.trim() !== '') {
+    try {
+      const aiStats = await loadAIStats();
+      if (aiStats && aiStats.total_attempts > 0) {
+        await logToFile('SYSTEM', 'AI_STATS', {
+          model: aiStats.model,
+          total_attempts: aiStats.total_attempts,
+          successful_attempts: aiStats.successful_attempts,
+          failed_attempts: aiStats.failed_attempts,
+          success_rate: aiStats.success_rate,
+          last_updated: aiStats.last_updated
+        });
+      }
+    } catch (error) {
+      // Ignore error, chỉ log nếu có lỗi
+      await logToFile('SYSTEM', 'AI_STATS_ERROR', { error: error.message });
+    }
+  }
   
   // Tổng kết
   console.log(`\n${'='.repeat(50)}`);
