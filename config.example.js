@@ -1,5 +1,5 @@
 // Cấu hình MBC-20 mint
-export const mint_data = `{"p":"mbc-20","op":"mint","tick":"CLAW","amt":"100"}`;
+export const mint_data = `{"p":"mbc-20","op":"mint","tick":"GPT","amt":"100"}`;
 
 // Cấu hình AI (ChatGPT) để tự động trả lời verification
 // Đặt USE_AI = true để bật tính năng AI tự động giải challenge
