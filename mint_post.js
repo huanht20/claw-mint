@@ -329,8 +329,19 @@ async function updateAIStats(success = true, model = 'gpt-5.2') {
     }
     
     await saveAIStats(stats);
+    
+    // Log update stats để debug
+    await logToFile('SYSTEM', 'AI_STATS_UPDATE', {
+      model: model,
+      success: success,
+      total_attempts: stats.total_attempts,
+      successful_attempts: stats.successful_attempts,
+      failed_attempts: stats.failed_attempts,
+      success_rate: stats.success_rate
+    });
   } catch (error) {
     console.error(`  ⚠ Lỗi khi update AI stats: ${error.message}`);
+    await logToFile('SYSTEM', 'AI_STATS_UPDATE_ERROR', { error: error.message, stack: error.stack });
   }
 }
 
@@ -636,14 +647,65 @@ async function postToAllAccounts(accounts, iteration = 1) {
           
           // Gửi verify request
           console.log(`  Đang gửi câu trả lời để verify...`);
-          const verifyResult = await verifyPost(account.api_key, verification.code, answer.trim(), account);
-          
-          // Log verify response vào file log (không print ra console)
-          await logToFile(account.name, 'VERIFY_RESPONSE', verifyResult);
-          
           const postId = result.post?.id;
+          let verifyResult = null;
+          let verifySuccess = false;
           
-          if (verifyResult.success) {
+          try {
+            verifyResult = await verifyPost(account.api_key, verification.code, answer.trim(), account);
+            verifySuccess = true;
+          } catch (verifyError) {
+            // Verify thất bại (throw error)
+            verifySuccess = false;
+            const errorMsg = verifyError.message || 'Unknown error';
+            console.log(`  ✖ Verification thất bại: ${errorMsg}`);
+            
+            // Nếu là AI answer và verify thất bại, update AI stats là failed
+            if (isAIAnswer) {
+              console.log(`  📊 Updating AI stats: failed (isAIAnswer=${isAIAnswer})`);
+              await updateAIStats(false, 'gpt-5.2');
+            }
+            
+            // Log verification thất bại
+            await logToFile(account.name, 'POST_FAILED', {
+              reason: 'VERIFICATION_FAILED',
+              error: errorMsg,
+              challenge: verification.challenge,
+              answer: answer.trim(),
+              verification_code: verification.code,
+              is_ai: isAIAnswer
+            });
+            
+            // Index post ngay cả khi verify thất bại (nếu có postId)
+            if (postId) {
+              console.log(`  ⏳ Đang index mint...`);
+              await delay(5000); // Đợi 5 giây trước khi index
+              
+              try {
+                const indexResult = await indexPost(postId, account);
+                if (indexResult.success !== false && indexResult.processed) {
+                  console.log(`  \x1b[32m✓ Đã index post thành công! Processed: ${indexResult.processed || 'N/A'}\x1b[0m`);
+                } else {
+                  console.log(`  \x1b[31m✖ Index post thất bại: ${indexResult.error || indexResult.message || 'Unknown error'}\x1b[0m`);
+                }
+              } catch (indexError) {
+                console.log(`  \x1b[31m✖ Lỗi khi index post: ${indexError.message}\x1b[0m`);
+              }
+            }
+            
+            results.push({
+              account: account.name,
+              success: false,
+              error: `Verification failed: ${errorMsg}`
+            });
+            failCount++;
+          }
+          
+          // Nếu verify thành công
+          if (verifySuccess && verifyResult) {
+            // Log verify response vào file log (không print ra console)
+            await logToFile(account.name, 'VERIFY_RESPONSE', verifyResult);
+            
             console.log(`  \x1b[32m✓ Verification thành công! Post ID: ${postId}\x1b[0m`);
             
             // Nếu là AI answer và verify thành công, update AI stats là success
@@ -679,56 +741,6 @@ async function postToAllAccounts(accounts, iteration = 1) {
                 console.log(`  \x1b[31m✖ Lỗi khi index post: ${indexError.message}\x1b[0m`);
               }
             }
-          } else {
-            const errorMsg = verifyResult.error || verifyResult.message || 'Unknown error';
-            console.log(`  ✖ Verification thất bại: ${errorMsg}`);
-            
-            // Nếu là AI answer và verify thất bại, update AI stats là failed
-            if (isAIAnswer) {
-              await updateAIStats(false, 'gpt-5.2');
-            }
-            
-            // Print toàn bộ verify response
-            console.log(`\n  ${'='.repeat(60)}`);
-            console.log(`  VERIFICATION FAILED - RESPONSE:`);
-            console.log(`  ${'='.repeat(60)}`);
-            console.log(JSON.stringify(verifyResult, null, 2));
-            console.log(`  ${'='.repeat(60)}\n`);
-            
-            // Log verification thất bại
-            await logToFile(account.name, 'POST_FAILED', {
-              reason: 'VERIFICATION_FAILED',
-              error: errorMsg,
-              challenge: verification.challenge,
-              answer: answer.trim(),
-              verification_code: verification.code,
-              verify_response: verifyResult,
-              is_ai: isAIAnswer
-            });
-            
-            // Index post ngay cả khi verify thất bại (nếu có postId)
-            if (postId) {
-              console.log(`  ⏳ Đang index mint...`);
-              await delay(5000); // Đợi 5 giây trước khi index
-              
-              try {
-                const indexResult = await indexPost(postId, account);
-                if (indexResult.success !== false && indexResult.processed) {
-                  console.log(`  \x1b[32m✓ Đã index post thành công! Processed: ${indexResult.processed || 'N/A'}\x1b[0m`);
-                } else {
-                  console.log(`  \x1b[31m✖ Index post thất bại: ${indexResult.error || indexResult.message || 'Unknown error'}\x1b[0m`);
-                }
-              } catch (indexError) {
-                console.log(`  \x1b[31m✖ Lỗi khi index post: ${indexError.message}\x1b[0m`);
-              }
-            }
-            
-            results.push({
-              account: account.name,
-              success: false,
-              error: `Verification failed: ${errorMsg}`
-            });
-            failCount++;
           }
         } else {
           console.log(`  ⚠ Bỏ qua verification (không có câu trả lời)`);
