@@ -4,12 +4,14 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import readline from 'readline';
 import { DELAY_AFTER_DAY } from './config.js';
+import { getRandomUserAgent, buildRequestOptions, fetchWithProxy } from './helper.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const ACCOUNTS_FILE = `${__dirname}/moltbook_accounts.json`;
 const INDEX_AGENT_API_URL = 'https://mbc20.xyz/api/index-agent';
+
 
 /**
  * Lưu danh sách tài khoản vào file JSON
@@ -104,16 +106,12 @@ function delay(ms) {
  */
 async function indexAgent(agentName, account = null) {
   try {
-    const fetchOptions = {};
+    const requestOptions = await buildRequestOptions(account);
     
-    // Sử dụng proxy nếu account có cấu hình
-    if (account && account.using_proxy === 1 && account.proxy) {
-      const { HttpsProxyAgent } = await import('https-proxy-agent');
-      const proxyAgent = new HttpsProxyAgent(account.proxy);
-      fetchOptions.agent = proxyAgent;
-    }
-    
-    const response = await fetch(`${INDEX_AGENT_API_URL}?name=${encodeURIComponent(agentName)}`, fetchOptions);
+    const response = await fetchWithProxy(`${INDEX_AGENT_API_URL}?name=${encodeURIComponent(agentName)}`, {
+      method: 'GET',
+      ...requestOptions
+    });
     const data = await response.json();
     
     if (!response.ok || !data.success) {

@@ -3,13 +3,70 @@ import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import readline from 'readline';
-import { DELAY_REGIS } from './config.js';
+import { DELAY_REGIS, USE_PROXY_FROM_CONFIG, PROXY_LIST } from './config.js';
+import { getRandomUserAgent, extractProxyIP, buildRequestOptions, fetchWithProxy } from './helper.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const ACCOUNTS_FILE = `${__dirname}/moltbook_accounts.json`;
 const API_URL = 'https://www.moltbook.com/api/v1/agents/register';
+
+
+/**
+ * Shuffle array (Fisher-Yates algorithm)
+ */
+function shuffleArray(array) {
+  const shuffled = [...array]; // Tạo bản sao để không thay đổi array gốc
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
+/**
+ * Extract IP từ proxy URL
+ * Format: http://username:password@host:port hoặc http://host:port
+ */
+function extractProxyIP(proxyUrl) {
+  if (!proxyUrl || typeof proxyUrl !== 'string') {
+    return null;
+  }
+  
+  try {
+    // Parse URL để lấy host
+    const url = new URL(proxyUrl);
+    return url.hostname; // Trả về IP hoặc hostname
+  } catch (error) {
+    // Nếu không parse được, thử extract bằng regex
+    const match = proxyUrl.match(/@([^:]+):/);
+    if (match) {
+      return match[1]; // IP/hostname sau @
+    }
+    // Nếu không có @, thử extract từ http://
+    const match2 = proxyUrl.match(/:\/\/([^:]+):/);
+    if (match2) {
+      return match2[1];
+    }
+    return null;
+  }
+}
+
+/**
+ * Lấy random proxy từ PROXY_LIST (nếu có)
+ */
+function getRandomProxy() {
+  if (!USE_PROXY_FROM_CONFIG || !PROXY_LIST || PROXY_LIST.length === 0) {
+    return null;
+  }
+  
+  // Shuffle proxy list mỗi lần chạy
+  const shuffledProxies = shuffleArray(PROXY_LIST);
+  const randomProxy = shuffledProxies[Math.floor(Math.random() * shuffledProxies.length)];
+  
+  return randomProxy;
+}
 
 /**
  * Đọc danh sách tài khoản từ file JSON
@@ -45,11 +102,23 @@ async function saveAccounts(accounts) {
  */
 async function registerMoltbookAccount(name, description = null) {
   try {
-    const response = await fetch(API_URL, {
+    // Sử dụng proxy nếu có khai báo
+    const proxy = getRandomProxy();
+    if (proxy) {
+      const proxyIP = extractProxyIP(proxy);
+      console.log(`  🔄 Đang sử dụng Proxy: ${proxy}`);
+      if (proxyIP) {
+        console.log(`  📍 Proxy IP: ${proxyIP}`);
+      }
+    }
+    
+    const requestOptions = await buildRequestOptions(null, proxy, {
+      'Content-Type': 'application/json'
+    });
+    
+    const response = await fetchWithProxy(API_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      ...requestOptions,
       body: JSON.stringify({
         name: name,
         description: description || `${name}'s AI agent on Moltbook`

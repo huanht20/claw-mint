@@ -3,7 +3,8 @@ import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import readline from 'readline';
-import { mint_data, USE_AI, OPENAI_API_KEY, DELAY_AFTER_DAY } from './config.js';
+import { mint_data, USE_AI, OPENAI_API_KEY, DELAY_AFTER_DAY, USE_PROXY_FROM_CONFIG, PROXY_LIST, MAX_ACCOUNTS_PER_IP, LIMIT_WAITING } from './config.js';
+import { getRandomUserAgent, extractProxyIP, isProxyError, buildRequestOptions, checkIP, fetchWithProxy } from './helper.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -12,6 +13,22 @@ const ACCOUNTS_FILE = `${__dirname}/moltbook_accounts.json`;
 const POST_API_URL = 'https://www.moltbook.com/api/v1/posts';
 const INDEX_POST_API_URL = 'https://mbc20.xyz/api/index-post';
 const VERIFY_API_URL = 'https://www.moltbook.com/api/v1/verify';
+
+// Proxy rotation state
+let proxyRotationState = {
+  currentProxyIndex: 0,
+  accountsUsedWithCurrentProxy: 0,
+  currentProxy: null
+};
+
+// Shuffled proxy list (được shuffle khi bắt đầu mỗi round)
+let shuffledProxyList = [];
+
+// State để track số accounts đã chạy khi không dùng proxy
+let noProxyState = {
+  accountsUsed: 0
+};
+
 
 /**
  * Tạo 10 ký tự ngẫu nhiên gồm số và chữ
@@ -78,6 +95,37 @@ async function loadAccounts() {
     if (existsSync(ACCOUNTS_FILE)) {
       const data = await readFile(ACCOUNTS_FILE, 'utf-8');
       const accounts = JSON.parse(data);
+      
+      // Kiểm tra và tự động update status = 1 nếu suspension_ends_at đã hết hạn
+      const now = new Date();
+      let hasUpdates = false;
+      
+      for (let i = 0; i < accounts.length; i++) {
+        const account = accounts[i];
+        if (account.suspension_ends_at && account.status === 0) {
+          // Parse suspension_ends_at (có thể là ISO string hoặc Unix timestamp)
+          let suspensionEndDate = null;
+          if (typeof account.suspension_ends_at === 'string') {
+            suspensionEndDate = new Date(account.suspension_ends_at);
+          } else if (typeof account.suspension_ends_at === 'number') {
+            // Nếu là Unix timestamp (seconds hoặc milliseconds)
+            suspensionEndDate = new Date(account.suspension_ends_at * (account.suspension_ends_at < 1e12 ? 1000 : 1));
+          }
+          
+          if (suspensionEndDate && !isNaN(suspensionEndDate.getTime()) && suspensionEndDate <= now) {
+            // Suspension đã hết hạn, tự động kích hoạt lại account
+            accounts[i].status = 1;
+            accounts[i].suspension_ends_at = null; // Xóa thời gian suspension
+            hasUpdates = true;
+            console.log(`  ✓ Tự động kích hoạt lại account ${account.name} (suspension đã hết hạn)`);
+          }
+        }
+      }
+      
+      // Lưu lại nếu có updates
+      if (hasUpdates) {
+        await saveAccounts(accounts);
+      }
       
       // Cập nhật delay dựa trên thời gian đăng ký
       return await updateDelayBasedOnRegistration(accounts);
@@ -346,6 +394,37 @@ async function updateAIStats(success = true, model = 'gpt-5.2') {
 }
 
 /**
+ * Parse hint để lấy thời gian kết thúc suspension
+ * Trả về Unix timestamp (seconds) hoặc null nếu không parse được
+ */
+function parseSuspensionEndTime(hint) {
+  if (!hint || typeof hint !== 'string') {
+    return null;
+  }
+  
+  // Pattern: "ends in X hours" hoặc "ends in X days"
+  // Case insensitive
+  const hourPattern = /ends?\s+in\s+(\d+)\s+hours?/i;
+  const dayPattern = /ends?\s+in\s+(\d+)\s+days?/i;
+  
+  let match = hint.match(hourPattern);
+  if (match) {
+    const hours = parseInt(match[1], 10);
+    const endTime = new Date(Date.now() + (hours * 60 * 60 * 1000)); // Thêm số giờ vào thời gian hiện tại
+    return endTime.toISOString(); // Trả về định dạng ISO string (human-readable)
+  }
+  
+  match = hint.match(dayPattern);
+  if (match) {
+    const days = parseInt(match[1], 10);
+    const endTime = new Date(Date.now() + (days * 24 * 60 * 60 * 1000)); // Thêm số ngày vào thời gian hiện tại
+    return endTime.toISOString(); // Trả về định dạng ISO string (human-readable)
+  }
+  
+  return null;
+}
+
+/**
  * Log vào file để debug
  */
 async function logToFile(accountName, action, data) {
@@ -374,6 +453,232 @@ async function logToFile(accountName, action, data) {
   }
 }
 
+
+/**
+ * Lấy proxy cho account (với rotation logic)
+ */
+function getProxyForAccount(account) {
+  // Nếu account có cấu hình proxy riêng và using_proxy = 1, ưu tiên dùng proxy của account
+  if (account && account.using_proxy === 1 && account.proxy) {
+    return account.proxy;
+  }
+  
+  // Nếu không dùng proxy từ config, return null
+  if (!USE_PROXY_FROM_CONFIG || !shuffledProxyList || shuffledProxyList.length === 0) {
+    return null;
+  }
+  
+  // Khởi tạo proxy đầu tiên nếu chưa có
+  if (proxyRotationState.currentProxy === null) {
+    proxyRotationState.currentProxy = shuffledProxyList[proxyRotationState.currentProxyIndex];
+    const proxyIP = extractProxyIP(proxyRotationState.currentProxy);
+    console.log(`  🔄 Sử dụng proxy ${proxyRotationState.currentProxyIndex + 1}/${shuffledProxyList.length}: ${proxyRotationState.currentProxy}`);
+    if (proxyIP) {
+      console.log(`  📍 Proxy IP: ${proxyIP}`);
+    }
+  }
+  
+  return proxyRotationState.currentProxy;
+}
+
+/**
+ * Tăng số account đã dùng với proxy hiện tại và rotate nếu cần
+ */
+function incrementProxyUsage() {
+  if (!USE_PROXY_FROM_CONFIG || !shuffledProxyList || shuffledProxyList.length === 0) {
+    return;
+  }
+  
+  proxyRotationState.accountsUsedWithCurrentProxy++;
+  
+  // Nếu đã dùng hết số account cho phép với proxy hiện tại, rotate sang proxy tiếp theo
+  if (proxyRotationState.accountsUsedWithCurrentProxy >= MAX_ACCOUNTS_PER_IP) {
+    proxyRotationState.currentProxyIndex = (proxyRotationState.currentProxyIndex + 1) % shuffledProxyList.length;
+    proxyRotationState.accountsUsedWithCurrentProxy = 0;
+    proxyRotationState.currentProxy = shuffledProxyList[proxyRotationState.currentProxyIndex];
+    const proxyIP = extractProxyIP(proxyRotationState.currentProxy);
+    console.log(`  🔄 Rotate sang proxy ${proxyRotationState.currentProxyIndex + 1}/${shuffledProxyList.length}: ${proxyRotationState.currentProxy}`);
+    if (proxyIP) {
+      console.log(`  📍 Proxy IP: ${proxyIP}`);
+    }
+  }
+}
+
+/**
+ * Force rotate proxy (khi gặp rate limit)
+ */
+function forceRotateProxy() {
+  if (!USE_PROXY_FROM_CONFIG || !shuffledProxyList || shuffledProxyList.length === 0) {
+    return false; // Không có proxy để rotate
+  }
+  
+  proxyRotationState.currentProxyIndex = (proxyRotationState.currentProxyIndex + 1) % shuffledProxyList.length;
+  proxyRotationState.accountsUsedWithCurrentProxy = 0;
+  proxyRotationState.currentProxy = shuffledProxyList[proxyRotationState.currentProxyIndex];
+  const proxyIP = extractProxyIP(proxyRotationState.currentProxy);
+  console.log(`  🔄 Rate limit exceeded - Rotate sang proxy ${proxyRotationState.currentProxyIndex + 1}/${shuffledProxyList.length}: ${proxyRotationState.currentProxy}`);
+  if (proxyIP) {
+    console.log(`  📍 Proxy IP: ${proxyIP}`);
+  }
+  return true; // Đã rotate thành công
+}
+
+/**
+ * Shuffle array (Fisher-Yates algorithm)
+ */
+function shuffleArray(array) {
+  const shuffled = [...array]; // Tạo bản sao để không thay đổi array gốc
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
+/**
+ * Reset proxy rotation state (khi bắt đầu một round mới)
+ * Shuffle PROXY_LIST trước khi bắt đầu
+ */
+function resetProxyRotation() {
+  // Shuffle PROXY_LIST nếu có
+  if (USE_PROXY_FROM_CONFIG && PROXY_LIST && PROXY_LIST.length > 0) {
+    shuffledProxyList = shuffleArray(PROXY_LIST);
+    console.log(`  🔀 Đã shuffle ${shuffledProxyList.length} proxy trước khi bắt đầu`);
+  } else {
+    shuffledProxyList = [];
+  }
+  
+  proxyRotationState = {
+    currentProxyIndex: 0,
+    accountsUsedWithCurrentProxy: 0,
+    currentProxy: null
+  };
+}
+
+/**
+ * Reset no proxy state (khi bắt đầu một round mới hoặc sau khi đợi)
+ */
+function resetNoProxyState() {
+  noProxyState = {
+    accountsUsed: 0
+  };
+}
+
+/**
+ * Kiểm tra và đợi nếu cần (khi không dùng proxy và đã đạt MAX_ACCOUNTS_PER_IP)
+ */
+async function checkAndWaitIfNeeded() {
+  // Chỉ áp dụng khi không dùng proxy từ config (USE_PROXY_FROM_CONFIG = false)
+  if (USE_PROXY_FROM_CONFIG) {
+    return; // Đang dùng proxy từ config, không cần đợi
+  }
+  
+  // Nếu đã đạt MAX_ACCOUNTS_PER_IP, đợi LIMIT_WAITING phút
+  if (noProxyState.accountsUsed >= MAX_ACCOUNTS_PER_IP) {
+    const waitMinutes = LIMIT_WAITING;
+    const waitMs = waitMinutes * 60 * 1000; // Chuyển phút sang milliseconds
+    
+    console.log(`\n  ⏳ Đã đạt ${MAX_ACCOUNTS_PER_IP} accounts, đợi ${waitMinutes} phút trước khi tiếp tục...`);
+    console.log(`  ⏰ Bắt đầu đợi lúc: ${new Date().toLocaleTimeString()}`);
+    
+    await delay(waitMs);
+    
+    console.log(`  ✓ Đã đợi xong, tiếp tục mint...`);
+    
+    // Reset counter sau khi đợi
+    resetNoProxyState();
+  }
+}
+
+/**
+ * Tăng số account đã dùng khi không dùng proxy
+ */
+function incrementNoProxyUsage() {
+  // Chỉ tăng khi không dùng proxy từ config (USE_PROXY_FROM_CONFIG = false)
+  if (!USE_PROXY_FROM_CONFIG) {
+    noProxyState.accountsUsed++;
+  }
+}
+
+
+/**
+ * Tạo fetch options với proxy nếu có
+ */
+async function getFetchOptions(account) {
+  const proxy = getProxyForAccount(account);
+  const requestOptions = await buildRequestOptions(account, proxy);
+  return requestOptions;
+}
+
+/**
+ * Retry fetch với proxy mới nếu gặp lỗi proxy
+ */
+async function fetchWithProxyRetry(url, options, account, maxRetries = shuffledProxyList.length || 1) {
+  let lastError = null;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const proxy = getProxyForAccount(account);
+      const fetchOptions = await buildRequestOptions(account, proxy, options.headers || {});
+      
+      // Check IP để verify proxy (chỉ khi có proxy)
+      // if (proxy && attempt === 0) {
+      //   try {
+      //     const currentIP = await checkIP(proxy);
+      //     const proxyIP = extractProxyIP(proxy);
+      //     console.log(`  🌐 IP hiện tại qua proxy: ${currentIP}`);
+      //     if (proxyIP && currentIP === proxyIP) {
+      //       console.log(`  ✓ Proxy IP khớp với IP thực tế`);
+      //     } else if (proxyIP) {
+      //       console.log(`  ⚠ Proxy IP (${proxyIP}) khác với IP thực tế (${currentIP})`);
+      //     }
+      //   } catch (ipError) {
+      //     console.log(`  ⚠ Không thể check IP: ${ipError.message}`);
+      //   }
+      // }
+      
+      // Merge headers đúng cách (nếu options đã có headers)
+      const mergedOptions = {
+        ...options,
+        ...fetchOptions
+      };
+      
+      // Merge headers nếu cả hai đều có headers
+      if (options.headers && fetchOptions.headers) {
+        mergedOptions.headers = {
+          ...options.headers,
+          ...fetchOptions.headers
+        };
+      } else if (fetchOptions.headers) {
+        mergedOptions.headers = fetchOptions.headers;
+      }
+      
+      const response = await fetchWithProxy(url, mergedOptions);
+      
+      return response;
+    } catch (error) {
+      lastError = error;
+      
+      // Kiểm tra xem có phải lỗi proxy không
+      if (isProxyError(error) && USE_PROXY_FROM_CONFIG && shuffledProxyList && shuffledProxyList.length > 0) {
+        // Rotate sang proxy tiếp theo
+        const hasMoreProxies = forceRotateProxy();
+        if (hasMoreProxies && attempt < maxRetries - 1) {
+          console.log(`  ⚠ Proxy error: ${error.message} - Đang thử lại với proxy tiếp theo...`);
+          // Tiếp tục thử với proxy mới
+          continue;
+        }
+      }
+      
+      // Nếu không phải lỗi proxy hoặc đã thử hết proxy, throw error
+      throw error;
+    }
+  }
+  
+  // Nếu đã thử hết mà vẫn lỗi
+  throw lastError;
+}
+
 /**
  * Tạo post trên Moltbook
  */
@@ -396,14 +701,14 @@ async function createPost(apiKey, account, originalBody = null) {
       };
     }
     
-    const response = await fetch(POST_API_URL, {
+    const response = await fetchWithProxyRetry(POST_API_URL, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(body)
-    });
+    }, account);
 
     const data = await response.json();
 
@@ -441,26 +746,17 @@ function delay(ms) {
  */
 async function verifyPost(apiKey, verificationCode, answer, account = null) {
   try {
-    const fetchOptions = {
+    const response = await fetchWithProxyRetry(VERIFY_API_URL, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         verification_code: verificationCode,
         answer: answer
       })
-    };
-    
-    // Sử dụng proxy nếu account có cấu hình
-    if (account && account.using_proxy === 1 && account.proxy) {
-      const { HttpsProxyAgent } = await import('https-proxy-agent');
-      const proxyAgent = new HttpsProxyAgent(account.proxy);
-      fetchOptions.agent = proxyAgent;
-    }
-    
-    const response = await fetch(VERIFY_API_URL, fetchOptions);
+    }, account);
     const data = await response.json();
     
     if (!response.ok || !data.success) {
@@ -478,16 +774,10 @@ async function verifyPost(apiKey, verificationCode, answer, account = null) {
  */
 async function indexPost(postId, account = null) {
   try {
-    const fetchOptions = {};
-    
-    // Sử dụng proxy nếu account có cấu hình
-    if (account && account.using_proxy === 1 && account.proxy) {
-      const { HttpsProxyAgent } = await import('https-proxy-agent');
-      const proxyAgent = new HttpsProxyAgent(account.proxy);
-      fetchOptions.agent = proxyAgent;
-    }
-    
-    const response = await fetch(`${INDEX_POST_API_URL}?id=${postId}`, fetchOptions);
+    const response = await fetchWithProxyRetry(`${INDEX_POST_API_URL}?id=${postId}`, {
+      method: 'GET',
+      headers: {}
+    }, account);
     const data = await response.json();
     
     if (!response.ok || !data.success) {
@@ -539,7 +829,20 @@ async function postToAllAccounts(accounts, iteration = 1) {
       }
     }
     
+    // Kiểm tra và đợi nếu cần (khi không dùng proxy và đã đạt MAX_ACCOUNTS_PER_IP)
+    await checkAndWaitIfNeeded();
+    
     console.log(`[${i + 1}/${accounts.length}]Bắt đầu mint ở tài khoản ${account.name}...`);
+    
+    // Hiển thị thông báo nếu đang sử dụng proxy
+    const currentProxy = getProxyForAccount(account);
+    if (currentProxy) {
+      const proxyIP = extractProxyIP(currentProxy);
+      console.log(`  🔄 Đang sử dụng Proxy: ${currentProxy}`);
+      if (proxyIP) {
+        console.log(`  📍 Proxy IP: ${proxyIP}`);
+      }
+    }
     
     // Hỏi user xác nhận trước khi post (chỉ khi không dùng AI)
     if (!USE_AI || !OPENAI_API_KEY || OPENAI_API_KEY.trim() === '') {
@@ -551,8 +854,15 @@ async function postToAllAccounts(accounts, iteration = 1) {
       }
     }
 
-    try {
-      const { data: result, body: originalBody } = await createPost(account.api_key, account);
+    // Vòng lặp để thử tất cả proxy nếu gặp rate limit
+    let accountProcessed = false;
+    let initialProxyIndex = proxyRotationState.currentProxyIndex;
+    let proxiesTried = 0;
+    const maxProxiesToTry = USE_PROXY_FROM_CONFIG && shuffledProxyList && shuffledProxyList.length > 0 ? shuffledProxyList.length : 1;
+    
+    while (!accountProcessed && proxiesTried < maxProxiesToTry) {
+      try {
+        const { data: result, body: originalBody } = await createPost(account.api_key, account);
       
       // Log response vào file log (không print ra console)
       await logToFile(account.name, 'POST_RESPONSE', result);
@@ -834,33 +1144,87 @@ async function postToAllAccounts(accounts, iteration = 1) {
         
         // last_post đã được cập nhật trước đó khi post được tạo thành công
       }
-    } catch (error) {
-      // Kiểm tra nếu gặp lỗi Rate limit exceeded
-      const errorMsg = error.message.toLowerCase();
-      const isRateLimitExceeded = errorMsg.includes('rate limit exceeded');
       
-      if (isRateLimitExceeded) {
-        console.log(`\n  \x1b[31m✖ Lỗi: Rate limit exceeded - Dừng vòng mint hiện tại\x1b[0m`);
-        await logToFile(account.name, 'RATE_LIMIT_EXCEEDED', {
-          account_name: account.name,
-          timestamp: getLocalTimeString(),
-          error: error.message,
-          iteration: iteration
-        });
-        rateLimitExceeded = true;
-        results.push({
-          account: account.name,
-          success: false,
-          error: error.message
-        });
-        failCount++;
-        console.log(`\n${'='.repeat(50)}`);
-        console.log(`\x1b[31m✖ Vòng mint ${iteration} đã dừng do Rate limit exceeded\x1b[0m`);
-        console.log(`${'='.repeat(50)}\n`);
-        break; // Dừng vòng lặp hiện tại
-      }
-      
-      // Kiểm tra nếu account bị suspend hoặc blocked
+        // Đánh dấu account đã được xử lý thành công
+        accountProcessed = true;
+        proxiesTried++;
+        
+        // Tăng số account đã dùng với proxy hiện tại (sau khi xử lý xong account)
+        incrementProxyUsage();
+        
+        // Tăng số account đã dùng khi không dùng proxy (sau khi xử lý xong account)
+        incrementNoProxyUsage();
+      } catch (error) {
+        // Kiểm tra nếu gặp lỗi Rate limit exceeded
+        const errorMsg = error.message.toLowerCase();
+        const isRateLimitExceeded = errorMsg.includes('rate limit exceeded');
+        
+        if (isRateLimitExceeded) {
+          console.log(`\n  \x1b[31m✖ Lỗi: Rate limit exceeded (proxy ${proxyRotationState.currentProxyIndex + 1}/${shuffledProxyList.length})\x1b[0m`);
+          await logToFile(account.name, 'RATE_LIMIT_EXCEEDED', {
+            account_name: account.name,
+            timestamp: getLocalTimeString(),
+            error: error.message,
+            iteration: iteration,
+            proxy_index: proxyRotationState.currentProxyIndex,
+            proxies_tried: proxiesTried
+          });
+          
+          // Set flag để track
+          rateLimitExceeded = true;
+          proxiesTried++;
+          
+          // Nếu đang dùng proxy và còn proxy để thử, rotate sang proxy tiếp theo
+          if (USE_PROXY_FROM_CONFIG && shuffledProxyList && shuffledProxyList.length > 0 && proxiesTried < maxProxiesToTry) {
+            const hasMoreProxies = forceRotateProxy();
+            if (hasMoreProxies) {
+              // Kiểm tra proxy mới đã được set chưa
+              // const newProxy = getProxyForAccount(account);
+              // const newProxyIP = extractProxyIP(newProxy);
+              console.log(`  ⏳ Đang thử lại với proxy tiếp theo (${proxiesTried}/${maxProxiesToTry})...`);
+              // console.log(`  🔍 Debug: Proxy mới sẽ được sử dụng: ${newProxyIP || 'N/A'}`);
+              // Tiếp tục vòng lặp while để thử lại với proxy mới
+              continue;
+            }
+          }
+          
+          // Nếu đã thử hết proxy hoặc không dùng proxy, xử lý theo logic cũ
+          if (USE_PROXY_FROM_CONFIG && shuffledProxyList && shuffledProxyList.length > 0) {
+            // Đã thử hết proxy, bỏ qua account này
+            console.log(`  ⚠ Đã thử hết tất cả ${maxProxiesToTry} proxy, bỏ qua account này`);
+            results.push({
+              account: account.name,
+              success: false,
+              error: `Rate limit exceeded on all proxies`
+            });
+            failCount++;
+            accountProcessed = true; // Đánh dấu đã xử lý (thất bại)
+          } else {
+            // Không dùng proxy, đợi LIMIT_WAITING phút
+            const waitMinutes = LIMIT_WAITING;
+            const waitMs = waitMinutes * 60 * 1000; // Chuyển phút sang milliseconds
+            
+            console.log(`  ⏳ Không dùng proxy - Đợi ${waitMinutes} phút trước khi tiếp tục...`);
+            console.log(`  ⏰ Bắt đầu đợi lúc: ${new Date().toLocaleTimeString()}`);
+            
+            await delay(waitMs);
+            
+            console.log(`  ✓ Đã đợi xong, tiếp tục mint...`);
+            
+            // Reset no proxy state sau khi đợi
+            resetNoProxyState();
+            
+            results.push({
+              account: account.name,
+              success: false,
+              error: error.message
+            });
+            failCount++;
+            accountProcessed = true; // Đánh dấu đã xử lý (sau khi đợi)
+          }
+        } else {
+          // Không phải rate limit, xử lý các lỗi khác
+          // Kiểm tra nếu account bị suspend hoặc blocked
       const isSuspended = errorMsg.includes('suspended') || errorMsg.includes('account suspended');
       const isBlocked = errorMsg.includes('blocked') || errorMsg.includes('account blocked') || errorMsg.includes('block');
       
@@ -893,29 +1257,51 @@ async function postToAllAccounts(accounts, iteration = 1) {
           accounts[accountIndex].status = 0;
           accounts[accountIndex].status_updated_at = getLocalTimeString();
           accounts[accountIndex].status_hint = fullResponse.hint || fullResponse.error || null;
+          
+          // Parse thời gian kết thúc suspension từ hint
+          if (accounts[accountIndex].status_hint) {
+            const suspensionEndTime = parseSuspensionEndTime(accounts[accountIndex].status_hint);
+            if (suspensionEndTime) {
+              accounts[accountIndex].suspension_ends_at = suspensionEndTime; // Lưu dưới dạng ISO string
+              const endDate = new Date(suspensionEndTime);
+              console.log(`  ⏰ Suspension sẽ kết thúc lúc: ${endDate.toLocaleString()}`);
+            }
+          }
+          
           await saveAccounts(accounts);
           console.log(`  \x1b[32m✓ Đã tự động set status = 0 cho ${account.name}\x1b[0m`);
           if (accounts[accountIndex].status_hint) {
             console.log(`  📝 Hint: ${accounts[accountIndex].status_hint}`);
           }
         }
-      } else {
-        // Chỉ log ERROR nếu không phải suspended/blocked
-        await logToFile(account.name, 'ERROR', { error: error.message, stack: error.stack });
+        } else {
+          // Chỉ log ERROR nếu không phải suspended/blocked
+          await logToFile(account.name, 'ERROR', { error: error.message, stack: error.stack });
+        }
+        
+        results.push({
+          account: account.name,
+          success: false,
+          error: error.message
+        });
+        failCount++;
+        console.log(`  ✖ Lỗi: ${error.message}`);
+        
+        // Đánh dấu account đã được xử lý (thất bại)
+        accountProcessed = true;
+        
+        // Tăng số account đã dùng với proxy hiện tại (ngay cả khi có lỗi)
+        incrementProxyUsage();
+        
+        // Tăng số account đã dùng khi không dùng proxy (ngay cả khi có lỗi)
+        incrementNoProxyUsage();
+        }
       }
-      
-      results.push({
-        account: account.name,
-        success: false,
-        error: error.message
-      });
-      failCount++;
-      console.log(`  ✖ Lỗi: ${error.message}`);
     }
     
-    // Delay 12 giây giữa các account
+    // Delay 5 giây giữa các account
     if (i < accounts.length - 1) {
-      await delay(12000); // 12 giây delay
+      await delay(5000); // 5 giây delay
     }
     
     // Phân cách giữa các tài khoản
@@ -951,7 +1337,7 @@ async function postToAllAccounts(accounts, iteration = 1) {
   console.log(`\n${'='.repeat(50)}`);
   console.log(`Tổng kết lần ${iteration}:`);
   if (rateLimitExceeded) {
-    console.log(`  \x1b[31m⚠ Vòng mint đã dừng do Rate limit exceeded\x1b[0m`);
+    console.log(`  \x1b[33m⚠ Đã gặp Rate limit exceeded (đã xử lý: rotate proxy hoặc đợi)\x1b[0m`);
   }
   if (totalPosts > 0) {
     console.log(`  \x1b[32m✓ Thành công: ${successCount}/${totalPosts}\x1b[0m`);
@@ -1007,13 +1393,18 @@ async function main() {
 
       // Vòng lặp vô hạn
       while (true) {
+        // Reset proxy rotation khi bắt đầu round mới
+        resetProxyRotation();
+        // Reset no proxy state khi bắt đầu round mới
+        resetNoProxyState();
+        
         const { successCount, failCount, rateLimitExceeded } = await postToAllAccounts(accounts, iteration);
         totalSuccess += successCount;
         totalFail += failCount;
 
-        // Nếu rate limit exceeded, vẫn tiếp tục vòng sau
+        // Nếu rate limit exceeded, đã được xử lý trong vòng hiện tại (rotate proxy hoặc đợi)
         if (rateLimitExceeded) {
-          console.log(`\x1b[33m⚠ Rate limit exceeded ở vòng ${iteration}, sẽ tiếp tục vòng ${iteration + 1} sau ${repeatMinutes} phút...\x1b[0m\n`);
+          console.log(`\x1b[33mℹ Rate limit exceeded đã được xử lý ở vòng ${iteration}, tiếp tục vòng ${iteration + 1} sau ${repeatMinutes} phút...\x1b[0m\n`);
         }
 
         // Tính thời gian chờ đến lần tiếp theo
@@ -1027,6 +1418,11 @@ async function main() {
       }
     } else {
       // Chạy 1 lần như bình thường
+      // Reset proxy rotation khi bắt đầu
+      resetProxyRotation();
+      // Reset no proxy state khi bắt đầu
+      resetNoProxyState();
+      
       console.log(`\nĐang post cho ${activeAccounts.length} tài khoản...\n`);
       await postToAllAccounts(accounts, 1);
     }

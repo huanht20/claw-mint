@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import readline from 'readline';
 import { DELAY_AFTER_DAY } from './config.js';
+import { getRandomUserAgent, buildRequestOptions, fetchWithProxy } from './helper.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -14,6 +15,7 @@ const INDEX_POST_API_URL = 'https://mbc20.xyz/api/index-post';
 
 // Wallet address - biến được khai báo
 let WALLET_ADDRESS = '';
+
 
 /**
  * Cập nhật delay dựa trên thời gian đăng ký
@@ -125,17 +127,19 @@ function createLinkContent(wallet) {
 /**
  * Tạo post link wallet trên Moltbook
  */
-async function createLinkPost(apiKey, wallet) {
+async function createLinkPost(apiKey, wallet, account = null) {
   try {
     const content = createLinkContent(wallet);
     const title = `Link wallet ${generateRandomCharacters()}`;
 
-    const response = await fetch(POST_API_URL, {
+    const requestOptions = await buildRequestOptions(account, null, {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    });
+
+    const response = await fetchWithProxy(POST_API_URL, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
+      ...requestOptions,
       body: JSON.stringify({
         submolt: "general",
         title: title,
@@ -165,9 +169,14 @@ function delay(ms) {
 /**
  * Index post sau khi đã post thành công
  */
-async function indexPost(postId) {
+async function indexPost(postId, account = null) {
   try {
-    const response = await fetch(`${INDEX_POST_API_URL}?id=${postId}`);
+    const requestOptions = await buildRequestOptions(account);
+    
+    const response = await fetchWithProxy(`${INDEX_POST_API_URL}?id=${postId}`, {
+      method: 'GET',
+      ...requestOptions
+    });
     const data = await response.json();
     
     if (!response.ok || !data.success) {
@@ -302,7 +311,7 @@ async function main() {
       console.log(`[${i + 1}/${selectedAccounts.length}] Posting với ${account.name}...`);
 
       try {
-        const result = await createLinkPost(account.api_key, WALLET_ADDRESS);
+        const result = await createLinkPost(account.api_key, WALLET_ADDRESS, account);
         const postId = result.post?.id;
         
         results.push({
@@ -336,7 +345,7 @@ async function main() {
           await delay(5000);
           
           try {
-            const indexResult = await indexPost(postId);
+            const indexResult = await indexPost(postId, account);
             if (indexResult.success !== false && indexResult.processed) {
               console.log(`  \x1b[32m✓ Đã index post thành công! Processed: ${indexResult.processed || 'N/A'}\x1b[0m`);
             } else {
