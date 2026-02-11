@@ -116,6 +116,7 @@ async function loadAccounts() {
             // Suspension đã hết hạn, tự động kích hoạt lại account
             accounts[i].status = 1;
             accounts[i].suspension_ends_at = null; // Xóa thời gian suspension
+            accounts[i].status_hint = null; // Xóa hint
             hasUpdates = true;
             console.log(`  ✓ Tự động kích hoạt lại account ${account.name} (suspension đã hết hạn)`);
           }
@@ -275,9 +276,10 @@ Instructions: ${instructions}`;
 
 /**
  * Format local time string
+ * @param {Date} date - Date object (optional, defaults to now)
  */
-function getLocalTimeString() {
-  const now = new Date();
+function getLocalTimeString(date = null) {
+  const now = date || new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
@@ -411,14 +413,16 @@ function parseSuspensionEndTime(hint) {
   if (match) {
     const hours = parseInt(match[1], 10);
     const endTime = new Date(Date.now() + (hours * 60 * 60 * 1000)); // Thêm số giờ vào thời gian hiện tại
-    return endTime.toISOString(); // Trả về định dạng ISO string (human-readable)
+    // Trả về định dạng local time với timezone offset +07:00
+    return getLocalTimeString(endTime);
   }
   
   match = hint.match(dayPattern);
   if (match) {
     const days = parseInt(match[1], 10);
     const endTime = new Date(Date.now() + (days * 24 * 60 * 60 * 1000)); // Thêm số ngày vào thời gian hiện tại
-    return endTime.toISOString(); // Trả về định dạng ISO string (human-readable)
+    // Trả về định dạng local time với timezone offset +07:00
+    return getLocalTimeString(endTime);
   }
   
   return null;
@@ -805,6 +809,41 @@ async function postToAllAccounts(accounts, iteration = 1) {
     console.log(`${'='.repeat(50)}`);
   }
 
+  // Đếm số account theo từng loại trước khi bắt đầu
+  const currentTimestamp = Math.floor(Date.now() / 1000);
+  let eligibleCount = 0; // Account đủ điều kiện mint
+  let bannedCount = 0; // Account bị khoá (status = 0)
+  let delayCount = 0; // Account chưa đủ thời gian mint
+  
+  for (const account of accounts) {
+    if (account.status !== 1) {
+      bannedCount++;
+      continue;
+    }
+    
+    // Kiểm tra delay
+    const delayMinutes = account.delay !== undefined ? account.delay : 120;
+    const delaySeconds = delayMinutes * 60;
+    const lastPost = account.last_post || 0;
+    
+    if (lastPost > 0) {
+      const timeSinceLastPost = currentTimestamp - lastPost;
+      if (timeSinceLastPost < delaySeconds) {
+        delayCount++;
+        continue;
+      }
+    }
+    
+    eligibleCount++;
+  }
+  
+  // Hiển thị tổng kết
+  console.log(`\n📊 Tổng kết accounts:`);
+  console.log(`   ✓ Đủ điều kiện mint: ${eligibleCount}/${accounts.length}`);
+  console.log(`   🔒 Bị khoá (status = 0): ${bannedCount}`);
+  console.log(`   ⏳ Chưa đủ thời gian mint: ${delayCount}`);
+  console.log('');
+  
   // Post từng tài khoản
   for (let i = 0; i < accounts.length; i++) {
     const account = accounts[i];
@@ -817,15 +856,12 @@ async function postToAllAccounts(accounts, iteration = 1) {
     // Kiểm tra delay - nếu chưa đủ thời gian thì bỏ qua
     const delayMinutes = account.delay !== undefined ? account.delay : 120; // Mặc định 120 phút
     const delaySeconds = delayMinutes * 60; // Chuyển từ phút sang giây
-    const currentTimestamp = Math.floor(Date.now() / 1000); // Unix timestamp hiện tại (giây)
     const lastPost = account.last_post || 0;
     
     if (lastPost > 0) {
       const timeSinceLastPost = currentTimestamp - lastPost;
       if (timeSinceLastPost < delaySeconds) {
-        const remainingMinutes = Math.ceil((delaySeconds - timeSinceLastPost) / 60);
-        console.log(`[${i + 1}/${accounts.length}] Bỏ qua ${account.name} (chưa đủ delay, còn ${remainingMinutes} phút)`);
-        continue;
+        continue; // Bỏ qua không in ra console
       }
     }
     
@@ -1367,19 +1403,39 @@ async function main() {
       process.exit(1);
     }
 
-    // Lọc các account active (status === 1)
-    const activeAccounts = accounts.filter(acc => acc.status === 1);
-    const inactiveCount = accounts.length - activeAccounts.length;
+    // Đếm số account theo từng loại
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+    let eligibleCount = 0;
+    let bannedCount = 0;
+    let delayCount = 0;
     
-    console.log(`\nTìm thấy ${activeAccounts.length} tài khoản (status = 1):`);
-    activeAccounts.forEach((acc, index) => {
-      console.log(`  ${index + 1}. ${acc.name}`);
-    });
-    
-    if (inactiveCount > 0) {
-      console.log(`\n⚠ ${inactiveCount} tài khoản khác sẽ bị bỏ qua (status ≠ 1)`);
+    for (const account of accounts) {
+      if (account.status !== 1) {
+        bannedCount++;
+        continue;
+      }
+      
+      const delayMinutes = account.delay !== undefined ? account.delay : 120;
+      const delaySeconds = delayMinutes * 60;
+      const lastPost = account.last_post || 0;
+      
+      if (lastPost > 0) {
+        const timeSinceLastPost = currentTimestamp - lastPost;
+        if (timeSinceLastPost < delaySeconds) {
+          delayCount++;
+          continue;
+        }
+      }
+      
+      eligibleCount++;
     }
-    console.log(`\x1b[32m✓ ${activeAccounts.length} tài khoản sẽ được post\x1b[0m`);
+    
+    // Hiển thị tổng kết
+    console.log(`\n📊 Tổng kết accounts:`);
+    console.log(`   ✓ Đủ điều kiện mint: ${eligibleCount}/${accounts.length}`);
+    console.log(`   🔒 Bị khoá (status = 0): ${bannedCount}`);
+    console.log(`   ⏳ Chưa đủ thời gian mint: ${delayCount}`);
+    console.log('');
 
 
     if (repeatMinutes && repeatMinutes > 0) {
