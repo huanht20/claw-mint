@@ -13,19 +13,64 @@ git clone https://github.com/huanht20/claw-mint.git
 cd claw-mint
 ```
 
-## 2. Cài đặt PM2
+## 2. Kiểm tra và cài đặt Node.js
+
+### Kiểm tra version Node.js:
+```bash
+node -v
+```
+
+**Yêu cầu:** Node.js >= 14.x (khuyến nghị >= 18.x)
+
+### Nếu Node.js chưa được cài đặt hoặc version quá cũ:
+
+**Cách 1: Sử dụng nvm (khuyến nghị)**
+```bash
+# Cài đặt nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+
+# Reload shell
+source ~/.bashrc
+
+# Cài đặt Node.js 18
+nvm install 18
+nvm use 18
+
+# Kiểm tra lại
+node -v
+```
+
+**Cách 2: Cài đặt từ NodeSource**
+```bash
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Kiểm tra lại
+node -v
+npm -v
+```
+
+### Kiểm tra package.json có "type": "module":
+```bash
+cd ~/project/claw-mint
+cat package.json | grep "type"
+```
+
+Nếu không thấy `"type": "module"`, cần thêm vào (xem file `VPS_TROUBLESHOOTING.md`).
+
+## 3. Cài đặt PM2
 
 ```bash
 npm install -g pm2
 ```
 
-## 3. Cài đặt dependencies
+## 4. Cài đặt dependencies
 
 ```bash
 npm install
 ```
 
-## 4. Cài đặt Python dependencies (cho script update proxy)
+## 5. Cài đặt Python dependencies (cho script update proxy)
 
 ```bash
 python3 -m venv venv
@@ -33,7 +78,7 @@ source venv/bin/activate
 pip install requests
 ```
 
-## 5. Cấu hình file
+## 6. Cấu hình file
 
 ### Copy file config từ máy local lên VPS:
 
@@ -62,7 +107,7 @@ nano config.js  # hoặc vi config.js
 - File `config.js` và `moltbook_accounts.json` không được commit lên git (đã có trong .gitignore)
 - Cần copy thủ công từ máy local lên VPS hoặc tạo mới trên VPS
 
-## 6. Chạy với PM2
+## 7. Chạy với PM2
 
 ### Chạy mint post (tự động lặp lại):
 ```bash
@@ -84,7 +129,7 @@ pm2 start ecosystem.config.js --only link-wallet
 pm2 start ecosystem.config.js --only index-agent
 ```
 
-## 7. Các lệnh PM2 thường dùng
+## 8. Các lệnh PM2 thường dùng
 
 ```bash
 # Xem danh sách processes
@@ -114,7 +159,7 @@ pm2 save
 pm2 startup  # Chạy lệnh này và làm theo hướng dẫn
 ```
 
-## 8. Cấu hình tự động start khi reboot
+## 9. Cấu hình tự động start khi reboot
 
 ```bash
 pm2 save
@@ -122,7 +167,7 @@ pm2 startup
 # Chạy lệnh mà PM2 đưa ra (thường là sudo ...)
 ```
 
-## 9. Xem logs
+## 10. Xem logs
 
 Logs được lưu tại:
 - `./log/pm2-out.log` - Output logs
@@ -134,7 +179,7 @@ Xem logs real-time:
 pm2 logs mint-post --lines 50
 ```
 
-## 10. Update code mới
+## 11. Update code mới
 
 ### Cách 1: Pull code mới từ GitHub
 ```bash
@@ -169,7 +214,11 @@ npm install
 pm2 restart mint-post
 ```
 
-## 11. Chạy script update proxy live
+## 12. Chạy script update proxy live
+
+## 13. Troubleshooting
+
+Nếu gặp lỗi `SyntaxError: Unexpected token {`, xem file `VPS_TROUBLESHOOTING.md` để biết cách xử lý.
 
 ```bash
 # Activate virtual environment

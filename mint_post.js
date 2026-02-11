@@ -1479,7 +1479,7 @@ async function main() {
       // Reset no proxy state khi bắt đầu
       resetNoProxyState();
       
-      console.log(`\nĐang post cho ${activeAccounts.length} tài khoản...\n`);
+      console.log(`\nĐang post cho ${eligibleCount} tài khoản...\n`);
       await postToAllAccounts(accounts, 1);
     }
 
