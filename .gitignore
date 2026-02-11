@@ -6,6 +6,10 @@ __pycache__/
 
 # Config files
 config.js
+config.js.backup
+
+# Account files (chứa thông tin nhạy cảm)
+moltbook_accounts.json
 
 # Logs
 *.log
