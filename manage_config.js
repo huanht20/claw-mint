@@ -1,6 +1,6 @@
 import readline from 'readline';
-import { updateMintData, addProxy } from './update_config.js';
-import { PROXY_LIST } from './config.js';
+import { updateMintData, addProxy, updateOpenAIApiKey } from './update_config.js';
+import { PROXY_LIST, OPENAI_API_KEY } from './config.js';
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -104,6 +104,54 @@ async function addProxyMenu() {
 }
 
 /**
+ * Hàm update OpenAI API Key
+ */
+async function updateApiKeyMenu() {
+  console.log('\n🔑 === UPDATE OPENAI API KEY ===');
+  
+  // Hiển thị API key hiện tại (ẩn một phần để bảo mật)
+  const currentKey = OPENAI_API_KEY || '';
+  const maskedKey = currentKey 
+    ? `${currentKey.substring(0, 10)}...${currentKey.substring(currentKey.length - 4)}`
+    : '(chưa có)';
+  console.log(`API Key hiện tại: ${maskedKey}\n`);
+  
+  const apiKey = await question('Nhập OpenAI API Key mới (hoặc Enter để bỏ qua): ');
+  
+  if (!apiKey.trim()) {
+    console.log('⚠️  API Key không được để trống, hủy bỏ.');
+    return;
+  }
+  
+  // Validate basic format (OpenAI API key thường bắt đầu bằng "sk-")
+  if (!apiKey.startsWith('sk-') && !apiKey.startsWith('sk-proj-')) {
+    console.log('⚠️  OpenAI API Key thường bắt đầu bằng "sk-" hoặc "sk-proj-"');
+    const confirm = await question('Bạn có muốn tiếp tục không? (y/n): ');
+    if (confirm.toLowerCase() !== 'y') {
+      return;
+    }
+  }
+  
+  // Hiển thị preview
+  const maskedNewKey = `${apiKey.substring(0, 10)}...${apiKey.substring(apiKey.length - 4)}`;
+  console.log('\n📋 Preview:');
+  console.log(`API Key mới: ${maskedNewKey}`);
+  
+  const confirm = await question('\nBạn có chắc chắn muốn cập nhật? (y/n): ');
+  if (confirm.toLowerCase() !== 'y') {
+    console.log('⚠️  Đã hủy bỏ cập nhật.');
+    return;
+  }
+  
+  try {
+    await updateOpenAIApiKey(apiKey.trim());
+    console.log('\n✅ Đã cập nhật OpenAI API Key thành công!');
+  } catch (error) {
+    console.error(`\n❌ Lỗi: ${error.message}`);
+  }
+}
+
+/**
  * Hàm main với menu
  */
 async function main() {
@@ -113,9 +161,10 @@ async function main() {
     console.log('Chọn chức năng:');
     console.log('1. Update mint_data');
     console.log('2. Thêm proxy vào PROXY_LIST');
+    console.log('3. Update OpenAI API Key');
     console.log('0. Thoát\n');
     
-    const choice = await question('Nhập lựa chọn (0-2): ');
+    const choice = await question('Nhập lựa chọn (0-3): ');
     
     switch (choice.trim()) {
       case '1':
@@ -123,6 +172,9 @@ async function main() {
         break;
       case '2':
         await addProxyMenu();
+        break;
+      case '3':
+        await updateApiKeyMenu();
         break;
       case '0':
         console.log('\n👋 Tạm biệt!');

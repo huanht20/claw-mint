@@ -22,3 +22,7 @@ export const PROXY_LIST = [
 export const MAX_ACCOUNTS_PER_IP = 5; // Số account tối đa mỗi IP/proxy trước khi rotate
 export const LIMIT_WAITING = 5; // Thời gian đợi (phút) sau khi đạt MAX_ACCOUNTS_PER_IP khi không dùng proxy
 
+// Cấu hình Telegram Bot (cho telegram_bot.js)
+export const TELEGRAM_BOT_TOKEN = ''; // Bot token từ @BotFather (để trống nếu không dùng)
+export const TELEGRAM_ALLOWED_USER_IDS = []; // Danh sách User ID được phép sử dụng bot (để trống [] nếu cho phép tất cả)
+
