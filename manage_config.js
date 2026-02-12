@@ -22,14 +22,23 @@ function question(prompt) {
 async function updateMintDataMenu() {
   console.log('\n📝 === UPDATE MINT_DATA ===');
   console.log('Nhập nội dung mint_data mới (có thể nhiều dòng).');
-  console.log('Nhập "END" trên một dòng riêng để kết thúc.\n');
+  console.log('📌 Hướng dẫn:');
+  console.log('   - Nhập "END" trên một dòng riêng để kết thúc và lưu');
+  console.log('   - Nhập "CANCEL" để hủy bỏ\n');
   
   let mintDataLines = [];
   let line;
   
   do {
     line = await question('> ');
-    if (line.trim().toUpperCase() !== 'END') {
+    const trimmedLine = line.trim().toUpperCase();
+    
+    if (trimmedLine === 'CANCEL') {
+      console.log('⚠️  Đã hủy bỏ cập nhật mint_data.');
+      return;
+    }
+    
+    if (trimmedLine !== 'END') {
       mintDataLines.push(line);
     }
   } while (line.trim().toUpperCase() !== 'END');
@@ -41,13 +50,21 @@ async function updateMintDataMenu() {
   
   const mintData = mintDataLines.join('\n');
   
+  // Hiển thị preview trước khi xác nhận
+  console.log('\n📋 Preview nội dung mới:');
+  console.log('─'.repeat(50));
+  console.log(mintData);
+  console.log('─'.repeat(50));
+  
+  const confirm = await question('\nBạn có chắc chắn muốn cập nhật? (y/n): ');
+  if (confirm.toLowerCase() !== 'y') {
+    console.log('⚠️  Đã hủy bỏ cập nhật.');
+    return;
+  }
+  
   try {
     await updateMintData(mintData);
     console.log('\n✅ Đã cập nhật mint_data thành công!');
-    console.log('Nội dung mới:');
-    console.log('─'.repeat(50));
-    console.log(mintData);
-    console.log('─'.repeat(50));
   } catch (error) {
     console.error(`\n❌ Lỗi: ${error.message}`);
   }
