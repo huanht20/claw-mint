@@ -3,6 +3,7 @@ module.exports = {
     {
       name: 'mint-post',
       script: 'mint_post.js',
+      interpreter: 'node',
       instances: 1,
       autorestart: true,
       watch: false,

@@ -132,7 +132,7 @@ async function registerMoltbookAccount(name, description = null) {
     }
 
     const registeredAt = Math.floor(Date.now() / 1000); // Unix timestamp (giây)
-    
+
     return {
       name: data.agent.name,
       api_key: data.agent.api_key,

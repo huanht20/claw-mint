@@ -930,8 +930,10 @@ async function postToAllAccounts(accounts, iteration = 1) {
         });
       }
       
-      // Cập nhật last_post ngay khi post được tạo thành công (có post ID)
+      // Lấy postId ngay khi post được tạo (có thể cần verification sau)
       const postId = result.post?.id;
+      
+      // Cập nhật last_post ngay khi post được tạo thành công (có post ID)
       if (postId && result.success !== false) {
         const timestamp = Math.floor(Date.now() / 1000);
         account.last_post = timestamp;
@@ -1019,12 +1021,13 @@ async function postToAllAccounts(accounts, iteration = 1) {
               challenge: verification.challenge,
               answer: answer.trim(),
               verification_code: verification.code,
-              is_ai: isAIAnswer
+              is_ai: isAIAnswer,
+              post_id: postId // Đảm bảo postId được log
             });
             
             // Index post ngay cả khi verify thất bại (nếu có postId)
             if (postId) {
-              console.log(`  ⏳ Đang index mint...`);
+              console.log(`  ⏳ Đang index post...`);
               await delay(5000); // Đợi 5 giây trước khi index
               
               try {
@@ -1035,14 +1038,22 @@ async function postToAllAccounts(accounts, iteration = 1) {
                   console.log(`  \x1b[31m✖ Index post thất bại: ${indexResult.error || indexResult.message || 'Unknown error'}\x1b[0m`);
                 }
               } catch (indexError) {
-                console.log(`  \x1b[31m✖ Lỗi khi index post: ${indexError.message}\x1b[0m`);
+                // Xử lý lỗi "Post not found" một cách graceful
+                if (indexError.message && (indexError.message.includes('Post not found') || indexError.message.includes('not found'))) {
+                  console.log(`  \x1b[33m⚠ Post chưa được publish (verification failed), không thể index. Post ID: ${postId}\x1b[0m`);
+                } else {
+                  console.log(`  \x1b[31m✖ Lỗi khi index post: ${indexError.message}\x1b[0m`);
+                }
               }
+            } else {
+              console.log(`  ⚠ Không có Post ID để index (verification failed)`);
             }
             
             results.push({
               account: account.name,
               success: false,
-              error: `Verification failed: ${errorMsg}`
+              error: `Verification failed: ${errorMsg}`,
+              post_id: postId || null // Vẫn lưu postId vào results
             });
             failCount++;
           }
